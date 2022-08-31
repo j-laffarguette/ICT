@@ -32,45 +32,128 @@ class Patient:
         # Administratif Raystation
         self.case = get_current("Case")
         self.examination = get_current("Examination")
-        self.exam_name = self.examination
+        self.exam_name = self.examination.Name
         self.patient = get_current("Patient")
         self.db = get_current("PatientDB")
 
         # Récupération des informations des CT (nom + scan position HFS ou FFS)
         self.examinations = []  # dictionnaire {"exam_name":"FFS/HFS", ...}
         self.get_ct_list()  # méthode utilisée pour récupérer les données
+        self.set_primary(self.examinations['HFS'])
+
+
 
         self.roi_list = []
         self.patient_id = self.patient.PatientID
 
+
+
+
         # Récupération de la position de tous les POI sur le scanner HFS
-        # todo : modifier pour ne pas avoir à indiquer HFS ou FFS ici (mettre le get_coords dans le main?)
-        self.jonctionHFS = self.get_point_coords(self.examinations['HFS'], 'jonction')
-        self.jonctionFFS = self.get_point_coords(self.examinations['FFS'], 'jonction')
-        self.pubis = self.get_point_coords(self.examinations['HFS'], 'pubis')
-        self.genoux = self.get_point_coords(self.examinations['HFS'], 'genoux')
-        self.cou = self.get_point_coords(self.examinations['HFS'], 'cou')
-        self.thorax = self.get_point_coords(self.examinations['HFS'], 'thorax')
-        self.abdomen = self.get_point_coords(self.examinations['HFS'], 'abdomen')  # todo: ajouter à la procédure
 
+        self.jonction = self.get_point_coords('jonction')
+        self.pubis = self.get_point_coords('pubis')
+        self.genoux = self.get_point_coords('genoux')
+        self.cou = self.get_point_coords('cou')
+        self.thorax = self.get_point_coords('thorax')
+        self.abdomen = self.get_point_coords('abdomen')  # todo: ajouter à la procédure
         # Création du point zero (crane) situé à 0,0,hauteur table (valeur exprimée en mm convertie en cm)
-        zero_scanHFS = \
-        self.case.Examinations[self.examinations['HFS']].GetStoredDicomTagValueForVerification(Group=0x0018,
-                                                                                               Element=0x1130)[
+        zero_scan = \
+        self.case.Examinations[self.exam_name].GetStoredDicomTagValueForVerification(Group=0x0018, Element=0x1130)[
             'Table Height']
-        zero_scanFFS = \
-        self.case.Examinations[self.examinations['FFS']].GetStoredDicomTagValueForVerification(Group=0x0018,
-                                                                                               Element=0x1130)[
-            'Table Height']
-        self.zero_scanHFS = -float(zero_scanHFS) / 10
-        self.zero_scanFFS = -float(zero_scanFFS) / 10
-        self.create_poi('crane', self.examinations['HFS'], (0, self.zero_scanHFS, 0))
-        self.create_poi('jonctionFFS', self.examinations['FFS'], (0, self.zero_scanFFS, 0))
-        print('')
+        self.zero_scan = -float(zero_scan) / 10
 
-    def set_primary(self,exam_name):
+        # todo création des points à la toute fin pour simplification
+        # self.create_poi('crane', self.examinations['HFS'], (0, self.zero_scanHFS, 0))
+        # self.create_poi('jonctionFFS', self.examinations['FFS'], (0, self.zero_scanFFS, 0))
+        # print('')
+
+    def get_zero_scan(self, scan_direction):
+        zero_scan = \
+        self.case.Examinations[self.examinations[scan_direction]].GetStoredDicomTagValueForVerification(Group=0x0018,
+                                                                                                        Element=0x1130)[
+            'Table Height']
+        return -float(zero_scan) / 10
+
+    def create_cylinder_ptv(self, roi_name, y_cranial, y_caudal):
+        x0, z0 = 0, self.zero_scan
+        long = y_cranial - y_caudal  # longueur du volume
+        center = y_cranial - long / 2  # centre du volume
+        obj_patient.cylinder(roi_name, (x0, z0, center), longueur=abs(long))
+
+
+    def cylinder(self, roi_name, coords, longueur=2, retraction=True):
+        x, y,z = coords
+        self.case.PatientModel.RegionsOfInterest[roi_name].CreateCylinderGeometry(Radius=30,
+                                                                                  Axis={'x': 0, 'y': 0, 'z': 1},
+                                                                                  Length=longueur,
+                                                                                  Examination=self.examination,
+                                                                                  Center={'x': x,
+                                                                                          'y': y,
+                                                                                          'z': z},
+                                                                                  Representation="TriangleMesh",
+                                                                                  VoxelSize=None)
+
+        if retraction:
+            self.retraction(roi_name)
+
+
+    def get_point_coords(self, point_name):
+        point = self.case.PatientModel.StructureSets[self.exam_name].PoiGeometries[point_name]
+        coords = point.Point
+        if coords is not None:
+            return coords.x, coords.y, coords.z
+        else:
+            return None
+
+    def algebra_soustraction(self, roi_a, roi_b):
+        # Simple soustraction entre deux volumes. Ecrase le volume de départ. Utilisé pour PTV_B-poumons = PTV_B
+        self.case.PatientModel.RegionsOfInterest[roi_a].CreateAlgebraGeometry(
+            Examination=self.examination, Algorithm="Auto",
+            ExpressionA={'Operation': "Union",
+                         'SourceRoiNames': [roi_a],
+                         'MarginSettings': {
+                             'Type': "Expand",
+                             'Superior': 0,
+                             'Inferior': 0,
+                             'Anterior': 0,
+                             'Posterior': 0, 'Right': 0,
+                             'Left': 0}},
+            ExpressionB={'Operation': "Union",
+                         'SourceRoiNames': [
+                             roi_b],
+                         'MarginSettings': {
+                             'Type': "Expand",
+                             'Superior': 0,
+                             'Inferior': 0,
+                             'Anterior': 0,
+                             'Posterior': 0, 'Right': 0,
+                             'Left': 0}},
+            ResultOperation="Subtraction",
+            ResultMarginSettings={'Type': "Expand",
+                                  'Superior': 0,
+                                  'Inferior': 0,
+                                  'Anterior': 0,
+                                  'Posterior': 0,
+                                  'Right': 0, 'Left': 0})
+
+    def set_primary(self, exam_name):
         self.case.Examinations[exam_name].SetPrimary()
         self.examination = get_current("Examination")
+        self.exam_name = self.examination.Name
+        # Récupération de la position de tous les POI sur le scanner HFS
+
+        self.jonction = self.get_point_coords('jonction')
+        self.pubis = self.get_point_coords('pubis')
+        self.genoux = self.get_point_coords('genoux')
+        self.cou = self.get_point_coords('cou')
+        self.thorax = self.get_point_coords('thorax')
+        self.abdomen = self.get_point_coords('abdomen')  # todo: ajouter à la procédure
+        # Création du point zero (crane) situé à 0,0,hauteur table (valeur exprimée en mm convertie en cm)
+        zero_scan = \
+        self.case.Examinations[self.exam_name].GetStoredDicomTagValueForVerification(Group=0x0018, Element=0x1130)[
+            'Table Height']
+        self.zero_scan = -float(zero_scan) / 10
 
     def get_ct_list(self):
         examinations = {}
@@ -114,27 +197,26 @@ class Patient:
         color = ["#" + ''.join([random.choice('ABCDEF0123456789') for i in range(6)])][0]
         self.case.PatientModel.CreateRoi(Name=roi_name, Color=color, Type=roi_type)
 
-    def get_point_coords(self, exam_name, point_name):
-        coords = self.case.PatientModel.StructureSets[exam_name].PoiGeometries[point_name].Point
-        return coords.x, coords.y, coords.z
-
-    def cylinder(self, roi_name, examination, coords, longueur=2):
-        x, y, z = coords
+    def cylinder(self, roi_name, coords, longueur=2, retraction=True):
+        x, y,z = coords
         self.case.PatientModel.RegionsOfInterest[roi_name].CreateCylinderGeometry(Radius=30,
                                                                                   Axis={'x': 0, 'y': 0, 'z': 1},
                                                                                   Length=longueur,
-                                                                                  Examination=examination,
+                                                                                  Examination=self.examination,
                                                                                   Center={'x': x,
                                                                                           'y': y,
                                                                                           'z': z},
                                                                                   Representation="TriangleMesh",
                                                                                   VoxelSize=None)
 
-    def retraction(self, roi, examination):
-        self.case.PatientModel.RegionsOfInterest[roi].CreateAlgebraGeometry(Examination=examination,
+        if retraction:
+            self.retraction(roi_name)
+
+    def retraction(self, roi_name):
+        self.case.PatientModel.RegionsOfInterest[roi_name].CreateAlgebraGeometry(Examination=self.examination,
                                                                             Algorithm="Auto",
                                                                             ExpressionA={'Operation': "Union",
-                                                                                         'SourceRoiNames': [roi],
+                                                                                         'SourceRoiNames': [roi_name],
                                                                                          'MarginSettings': {
                                                                                              'Type': "Expand",
                                                                                              'Superior': 0,
@@ -161,7 +243,7 @@ class Patient:
                                                                                                   'Right': 0,
                                                                                                   'Left': 0})
 
-    def generate_poumons(self, examination):
+    def generate_poumons(self):
         if not check_roi(self.case, 'Poumons'):
             self.case.PatientModel.CreateRoi(Name="Poumons", Color="Aqua", Type="Organ", TissueName=None,
                                              RbeCellTypeName=None, RoiMaterial=None)
@@ -175,7 +257,25 @@ class Patient:
                                             'Posterior': 0, 'Right': 0, 'Left': 0}}, ResultOperation="None",
             ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
                                   'Right': 0, 'Left': 0})
-        retval_0.UpdateDerivedGeometry(Examination=examination, Algorithm="Auto")
+        retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
+
+    def generate_ptv_poumons(self):
+        if not check_roi(self.case, 'PTVpoumons'):
+            self.create_ROI('PTVpoumons')
+        retval_1 = self.case.PatientModel.RegionsOfInterest['PTVpoumons'].SetAlgebraExpression(
+            ExpressionA={'Operation': "Union", 'SourceRoiNames': ["Poumons"],
+                         'MarginSettings': {'Type': "Contract", 'Superior': 1, 'Inferior': 1, 'Anterior': 1,
+                                            'Posterior': 1,
+                                            'Right': 1, 'Left': 1}},
+            ExpressionB={'Operation': "Union", 'SourceRoiNames': [],
+                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
+                                            'Posterior': 0,
+                                            'Right': 0, 'Left': 0}}, ResultOperation="None",
+            ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
+                                  'Right': 0,
+                                  'Left': 0})
+
+        retval_1.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
 
     def create_poi(self, poi_name, examination, coords, color="128, 128, 255"):
         x, y, z = coords
@@ -235,13 +335,13 @@ if __name__ == '__main__':
     # ------------------------------------------------------------------------------------
     # On commence d'abord sur le scanner Head First puis on travaille sur le Feet First
 
-    trump = 'president'
-    for direction in ['HFS', 'FFS']:
+
+    for direction in ['FFS']:
         # ct_name pour simplification dans la boucle for
         ct_name = obj_patient.examinations[direction]
         ct = obj_patient.case.Examinations[ct_name]
 
-        # ct étudié mis en primary
+        # ct étudié mis en primary (très important, car redéfinit self.exam_name et self.examination dans la classe
         obj_patient.set_primary(ct_name)
 
         # Retrait des trous dans externe
@@ -255,129 +355,75 @@ if __name__ == '__main__':
                                                                               ResolveOverlappingContours=True)
 
         # créer poumon G+D
-        obj_patient.generate_poumons(ct)
+        obj_patient.generate_poumons()
 
-        # Création PTVpoumons (poumons - 1cm)
-        if not check_roi(obj_patient.case, 'PTVpoumons'):
-            obj_patient.create_ROI('PTVpoumons')
-        retval_1 = obj_patient.case.PatientModel.RegionsOfInterest['PTVpoumons'].SetAlgebraExpression(
-            ExpressionA={'Operation': "Union", 'SourceRoiNames': ["Poumons"],
-                         'MarginSettings': {'Type': "Contract", 'Superior': 1, 'Inferior': 1, 'Anterior': 1,
-                                            'Posterior': 1,
-                                            'Right': 1, 'Left': 1}},
-            ExpressionB={'Operation': "Union", 'SourceRoiNames': [],
-                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
-                                            'Posterior': 0,
-                                            'Right': 0, 'Left': 0}}, ResultOperation="None",
-            ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
-                                  'Right': 0,
-                                  'Left': 0})
-
-        retval_1.UpdateDerivedGeometry(Examination=ct, Algorithm="Auto")
+        # Création PTVpoumons = poumons - 1cm # seulement pour le scanner HFS!
+        if direction == 'HFS':
+            obj_patient.generate_ptv_poumons()
 
         # ------------------------------------------------------------------------------------
         # Création des cylindres
 
-        # récupération du point jonction, positionné sur la bille centrale au niveau de la jonction
-        if direction == 'HFS':
-            _, _, y0 = obj_patient.jonctionHFS  # y de ref est au niveau de la jonction
-            x0, z0 = 0, obj_patient.zero_scanHFS
-        elif direction == 'FFS':
-            _, _, y0 = obj_patient.jonctionFFS  # y de ref est au niveau de la jonction
-            x0, z0 = 0, obj_patient.zero_scanFFS
+        # récupération du point "jonction", positionné sur la bille au niveau de la jonction
+        _, _, y0 = obj_patient.jonction  # y de ref est au niveau de la jonction
+        x0, z0 = 0, obj_patient.zero_scan
 
         # Réalisation des PTV 2 à 5, entourant la bille jonction
         for index, roi in enumerate(['PTV_D2', 'PTV_D3', 'PTV_D4', 'PTV_D5']):
-            # Réalisation de plusieurs cylindres espacés de 2 cm en commençant de sorte à ce que la bille soit au niveau
+            # Réalisation de plusieurs cylindres espacés de 2 cm en commençant de sorte que la bille soit au niveau
             # de la premiere coupe du PTV D3
             y = y0 + 3 - 2 * index
-            # Création du cylindre
-            obj_patient.cylinder(roi, ct, (x0, z0, y))
-            # Rétraction de 3 mm au contour externe
-            obj_patient.retraction(roi, ct)
+            # Création du cylindre + retraction à la peau
+            obj_patient.cylinder(roi, (x0, z0, y))
+
+        from_to = []
 
         # Réalisation du PTV D6 : de la bille genoux jusqu'au bas du PTV D5
         bas_PTV5 = y0 - 4  # 4 cm en dessous de la bille jonction
         _, _, y_genoux = obj_patient.genoux
-        long = y_genoux - bas_PTV5  # longueur du volume
-        center = y_genoux - long / 2  # centre du volume
-        obj_patient.cylinder('PTV_D6', ct, (x0, z0, center), longueur=abs(long))
-        obj_patient.retraction('PTV_D6', ct)
 
         # Réalisation du PTV D1 : de la bille pubis jusqu'au haut du PTV D2
         haut_PTVD2 = y0 + 4  # 4 cm au dessus de la bille jonction
         _, _, y_pubis = obj_patient.pubis
-        long = y_pubis - haut_PTVD2  # longueur du volume
-        center = y_pubis - long / 2  # centre du volume
-        obj_patient.cylinder('PTV_D1', ct, (x0, z0, center), longueur=abs(long))
-        obj_patient.retraction('PTV_D1', ct)
 
+        from_to.append(['PTV_D6', y_genoux, bas_PTV5])
+        from_to.append(['PTV_D1', haut_PTVD2, y_pubis])
 
         if direction == 'HFS':
             # Réalisation du PTV C : au dessus du PTV D1 jusqu'à 3 cm en dessous des poumons
             sous_poumons = \
-                obj_patient.case.PatientModel.StructureSets[ct_name].RoiGeometries[
-                    "Poumons"].GetBoundingBox()[
+                obj_patient.case.PatientModel.StructureSets[ct_name].RoiGeometries["Poumons"].GetBoundingBox()[
                     0].z  # relou, raystation intervertit y et z
             sous_poumons -= 3  # 3cm en dessous du plus bas du poumon
-
-            long = sous_poumons - y_pubis  # longueur du volume
-            center = sous_poumons - long / 2  # centre du volume
-            obj_patient.cylinder('PTV_C', ct, (x0, z0, center), longueur=abs(long))
-            obj_patient.retraction('PTV_C', ct)
 
             # Réalisation du PTV B : au dessus du PTV C jusqu'à la bille cou
             # Edit 18/08/2022 -> soustraction des poumons
             _, _, y_cou = obj_patient.cou
-            long = y_cou - sous_poumons  # longueur du volume
-            center = y_cou - long / 2  # centre du volume
-            obj_patient.cylinder('PTV_B', ct, (x0, z0, center), longueur=abs(long))
-            obj_patient.retraction('PTV_B', ct)
 
-            obj_patient.case.PatientModel.RegionsOfInterest['PTV_B'].CreateAlgebraGeometry(
-                Examination=ct, Algorithm="Auto",
-                ExpressionA={'Operation': "Union",
-                             'SourceRoiNames': ["PTV_B"],
-                             'MarginSettings': {
-                                 'Type': "Expand",
-                                 'Superior': 0,
-                                 'Inferior': 0,
-                                 'Anterior': 0,
-                                 'Posterior': 0, 'Right': 0,
-                                 'Left': 0}},
-                ExpressionB={'Operation': "Union",
-                             'SourceRoiNames': [
-                                 "PTVpoumons"],
-                             'MarginSettings': {
-                                 'Type': "Expand",
-                                 'Superior': 0,
-                                 'Inferior': 0,
-                                 'Anterior': 0,
-                                 'Posterior': 0, 'Right': 0,
-                                 'Left': 0}},
-                ResultOperation="Subtraction",
-                ResultMarginSettings={'Type': "Expand",
-                                      'Superior': 0,
-                                      'Inferior': 0,
-                                      'Anterior': 0,
-                                      'Posterior': 0,
-                                      'Right': 0, 'Left': 0})
+            # TODO VOIR SI Nécessaire de mettre ça a la fin
+            obj_patient.algebra_soustraction('PTV_B', "PTVpoumons")
 
             # Réalisation du PTV A : au dessus du PTV B
             tout_en_haut = y_cou + 50
-            long = tout_en_haut - y_cou  # longueur du volume
-            center = tout_en_haut - long / 2  # centre du volume
-            obj_patient.cylinder('PTV_A', ct, (x0, z0, center), longueur=abs(long))
-            obj_patient.retraction('PTV_A', ct)
+
+
+            from_to.append(['PTV_C', sous_poumons, y_pubis])
+            from_to.append(['PTV_B', y_cou, sous_poumons])
+            from_to.append(['PTV_A',tout_en_haut, y_cou])
+
 
         elif direction == 'FFS':
             # Réalisation du PTV E : en dessous du PTV E
             tout_en_bas = y_genoux - 100
-            long = y_genoux - tout_en_bas  # longueur du volume
-            center = y_genoux - long / 2  # centre du volume
-            obj_patient.cylinder('PTV_E', ct, (x0, z0, center), longueur=abs(long))
-            obj_patient.retraction('PTV_E', ct)
 
+            from_to.append(['PTV_E', y_genoux, tout_en_bas])
+
+
+        print(from_to)
+        for roi, f, t in from_to:
+            obj_patient.create_cylinder_ptv(roi, f, t)
+
+        print('')
     # #########################################################################
     # #########################################################################
     # ################ TRAVAIL SUR LE PLAN DE TRAITEMENT ######################
