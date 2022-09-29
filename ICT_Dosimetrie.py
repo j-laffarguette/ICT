@@ -58,7 +58,7 @@ class Patient:
         self.genoux = self.get_point_coords('genoux')
         self.cou = self.get_point_coords('cou')
         self.thorax = self.get_point_coords('thorax')
-        self.abdomen = self.get_point_coords('abdomen')  # todo: ajouter à la procédure
+        self.abdomen = self.get_point_coords('abdomen')
         # Création du point zero (crane) situé à 0,0,hauteur table (valeur exprimée en mm convertie en cm)
         zero_scan = \
             self.case.Examinations[self.exam_name].GetStoredDicomTagValueForVerification(Group=0x0018, Element=0x1130)[
@@ -363,10 +363,12 @@ if __name__ == '__main__':
                 ReferenceFrameOfReference=RFOR)
 
         # Création du recalage entre le scanner FFS et le scanner HFS
+        # 1. création du for reg
         obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
             FromExaminationName=obj_patient.examinations['HFS'], ToExaminationName=obj_patient.examinations['FFS'],
             RegistrationName="HFS to FFS", Description=None)
 
+        # recalage automatique
         obj_patient.case.ComputeGrayLevelBasedRigidRegistration(FloatingExaminationName=obj_patient.examinations['HFS'],
                                                                 ReferenceExaminationName=obj_patient.examinations[
                                                                     'FFS'],
@@ -547,8 +549,9 @@ if __name__ == '__main__':
                 # Finalement, création du PTV haut, qui sera utilisé seul
                 obj_patient.algebra_union(['PTV_A', 'PTV_B', 'PTV_C', 'PTV_D1'], 'PTV haut')
 
-            # simplification des volumes pour eviter overlaps
-            roi_list = [roi.Name for roi in obj_patient.case.PatientModel.RegionsOfInterest]
+            # simplification des volumes pour éviter overlaps
+            roi_list = [roi.Name for roi in obj_patient.case.PatientModel.RegionsOfInterest if roi.Type == "Support"]
+
             obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].SimplifyContours(
                 RoiNames=roi_list,
                 RemoveHoles3D=False, RemoveSmallContours=False, AreaThreshold=None,
@@ -556,8 +559,8 @@ if __name__ == '__main__':
                 ResolveOverlappingContours=True)
 
             # Création d'un volume d'optimisation en sortie de jonction
-            # HFS -> PTV_D6 devient OAR
-            # FFS -> PTV D1 devient OAR
+            # HFS -> PTV_D6 devient "opt_jonction"
+            # FFS -> PTV D1 devient "opt_jonction"
 
             if direction == "HFS":
                 source = "PTV_D6"
@@ -572,6 +575,7 @@ if __name__ == '__main__':
                                                                    TissueName=None,
                                                                    RbeCellTypeName=None, RoiMaterial=None)
 
+            # génération du volume d'optimisation par simple Algebra and marging
             obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].CreateAlgebraGeometry(Examination=obj_patient.examination,
                                                                                       Algorithm="Auto",
                                                                                       ExpressionA={'Operation': "Union",
@@ -601,21 +605,6 @@ if __name__ == '__main__':
                                                                                           'Anterior': 0, 'Posterior': 0,
                                                                                           'Right': 0, 'Left': 0})
 
-            # obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].SetAlgebraExpression(
-            #     ExpressionA={'Operation': "Union", 'SourceRoiNames': [source],
-            #                  'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0,
-            #                                     'Anterior': 0, 'Posterior': 0, 'Right': 0,
-            #                                     'Left': 0}},
-            #     ExpressionB={'Operation': "Union", 'SourceRoiNames': [],
-            #                  'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0,
-            #                                     'Anterior': 0, 'Posterior': 0, 'Right': 0,
-            #                                     'Left': 0}}, ResultOperation="None",
-            #     ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0,
-            #                           'Anterior': 0, 'Posterior': 0, 'Right': 0, 'Left': 0})
-            #
-            # obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].DeleteExpression()
-
-            print("g")
 
     #########################################################################
     #########################################################################
@@ -745,7 +734,7 @@ if __name__ == '__main__':
 
         # Optimization settings
         plan.PlanOptimizations[0].OptimizationParameters.Algorithm.OptimalityTolerance = 1e-7
-        plan.PlanOptimizations[0].OptimizationParameters.Algorithm.MaxNumberOfIterations = 80
+        plan.PlanOptimizations[0].OptimizationParameters.Algorithm.MaxNumberOfIterations = 40
         plan.PlanOptimizations[0].OptimizationParameters.DoseCalculation.ComputeFinalDose = True
 
         # if ind = 0 = HFS la prescription est attribuée au PTV haut, sinon au PTV_E pour le plan FFS
