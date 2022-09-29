@@ -328,7 +328,7 @@ if __name__ == '__main__':
 
     obj_patient = Patient()
 
-    do_it = False
+    do_it = True
 
     if do_it:
         #########################################################################
@@ -398,7 +398,7 @@ if __name__ == '__main__':
         # mapping des POI d'un scanner vers l'autre
         pois = ["jonction", "genoux", "pubis", "abdomen"]
 
-        obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames= pois,
+        obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
                                                     CreateNewPois=False,
                                                     StructureRegistrationGroupNames=[reg_name],
                                                     ReferenceExaminationNames=[obj_patient.examinations['HFS']],
@@ -409,10 +409,15 @@ if __name__ == '__main__':
 
         # copie des structures de table du scanner HFS vers le FFS
 
-        obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination, TargetExaminationNames=[obj_patient.examinations["FFS"]],
-                                            RoiNames=["Mousse", "Renfort interne POM 1.4", "Nylon 1.15", "Carbon Fiber",
-                                                      "Renfort 1.2", "Upper pallet", "Lower pallet Radixact"],
-                                            ImageRegistrationNames=[], TargetExaminationNamesToSkipAddedReg=[obj_patient.examinations["FFS"]])
+        obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
+                                                        TargetExaminationNames=[obj_patient.examinations["FFS"]],
+                                                        RoiNames=["Mousse", "Renfort interne POM 1.4", "Nylon 1.15",
+                                                                  "Carbon Fiber",
+                                                                  "Renfort 1.2", "Upper pallet",
+                                                                  "Lower pallet Radixact"],
+                                                        ImageRegistrationNames=[],
+                                                        TargetExaminationNamesToSkipAddedReg=[
+                                                            obj_patient.examinations["FFS"]])
 
         # Création des ROI
         ROI_LIST = ['PTV_E', 'PTV_D6', 'PTV_D5', 'PTV_D4', 'PTV_D3', 'PTV_D2', 'PTV_D1', 'PTV_C', 'PTV_B', 'PTV_A',
@@ -552,20 +557,23 @@ if __name__ == '__main__':
     title = "Prescription"
     fields = ("Nombre de fractions", "Dose totale (Gy)")
 
-    # while verif !=1 :
-    #     mes_choix = multenterbox(msg, title, fields)
-    #     number_of_fractions = int(mes_choix[0])
-    #     total_dose = float(mes_choix[1])*100
-    #     fraction_dose = total_dose/number_of_fractions
-    #
-    #     if fraction_dose != 200:
-    #         msg = "Une erreur a été commise. \nVérifiez les données et recommencez !"
-    #     else:
-    #         break
+    easygui = True
 
-    number_of_fractions = 6
-    total_dose = 1200
-    fraction_dose = 200
+    if easygui:
+        while verif != 1:
+            mes_choix = multenterbox(msg, title, fields)
+            number_of_fractions = int(mes_choix[0])
+            total_dose = float(mes_choix[1]) * 100
+            fraction_dose = total_dose / number_of_fractions
+
+            if fraction_dose != 200:
+                msg = "Une erreur a été commise. \nVérifiez les données entrées et recommencez !"
+            else:
+                break
+    else:
+        number_of_fractions = 6
+        total_dose = 1200
+        fraction_dose = 200
 
     for ind, direction in enumerate(['HFS', 'FFS']):
 
@@ -655,7 +663,7 @@ if __name__ == '__main__':
 
         beam_set = get_current("BeamSet")
 
-        # if ind = 1 = HFS la prescription est attribuée au PTV haut, sinon au PTV_E pour le plan FFS
+        # if ind = 0 = HFS la prescription est attribuée au PTV haut, sinon au PTV_E pour le plan FFS
         if ind == 0:
             prescription_roi = 'PTV haut'
         else:
@@ -693,14 +701,22 @@ if __name__ == '__main__':
 
         choix = choix2
 
-        if choix == choix1:
+        if choix == choix1:  # du coup, ceci ne sera pas utilisé
             coords_laser_rouges_HFS = (0, obj_patient.zero_scan, obj_patient.thorax[2])
             # laser vert positionné 13 cm en dessous du laser rouge
             shift = -13
             coords_laser_vert = [0, coords_laser_rouges_HFS[1], obj_patient.thorax[2] + shift]
         elif choix == choix2:
             coords_laser_rouges_HFS = (obj_patient.genoux[0], obj_patient.zero_scan, obj_patient.abdomen[2])
-            coords_laser_vert = (0, obj_patient.zero_scan, obj_patient.abdomen[2])
+
+            if ind == 0:  # Plan HFS
+                coords_laser_vert = (0, obj_patient.zero_scan, obj_patient.abdomen[2])
+            elif ind == 1:  # Plan FFS
+                # Pour le plan FFS, le laser vert est positionné en AP au centre du volume PTV_E afin que le patient
+                # soit bien centré en hauteur et n'ait pas les genoux qui dépassent du cadre
+                AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.examinations['FFS']].RoiGeometries[
+                    'PTV_E'].GetCenterOfRoi().y
+                coords_laser_vert = (0, AP_iso_FFS, obj_patient.abdomen[2])
 
         # création du laser rouge
         obj_patient.create_poi(laser_rouge_HFS, coords_laser_rouges_HFS, color='Red')
@@ -753,7 +769,6 @@ if __name__ == '__main__':
 
         elif direction == 'FFS':
 
-            z_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.examinations['FFS']].RoiGeometries['PTV_E'].GetCenterOfRoi().z
             try:
                 beam_names = ['Ant', 'G', 'Post', 'D']
                 angles = [0, 90, 180, 270]
@@ -763,7 +778,7 @@ if __name__ == '__main__':
                     retval_0 = beam_set.CreatePhotonBeam(BeamQualityId="6", CyberKnifeCollimationType="Undefined",
                                                          CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
                                                          CyberKnifeAllowIncreasedPitchCorrection=None,
-                                                         IsocenterData={'Position': {'x': x, 'y': y, 'z': z_iso_FFS},
+                                                         IsocenterData={'Position': {'x': x, 'y': y, 'z': z},
                                                                         'NameOfIsocenterToRef': bs_name,
                                                                         'Name': bs_name,
                                                                         'Color': "98, 184, 234"}, Name=beam_name,
@@ -879,20 +894,16 @@ if __name__ == '__main__':
         # Finalement à la toute fin, on ajoute le max EUD sur le poumon pour le plan HFS
         try:
             if ind == 0:  # Plan HFS
-
-                dose = plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MaxEud", RoiName="Poumons",
-                                                                         IsConstraint=False,
-                                                                         RestrictAllBeamsIndividually=False,
-                                                                         RestrictToBeam=None, IsRobust=False,
-                                                                         RestrictToBeamSet=None, UseRbeDose=False)
-
-                dose.DoseFunctionParameters.DoseLevel = contrainte_poumon
-                dose.DoseFunctionParameters.Weight = weight_poumon
-
+                if total_dose >= 800:
+                    dose = plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MaxEud", RoiName="Poumons",
+                                                                             IsConstraint=False,
+                                                                             RestrictAllBeamsIndividually=False,
+                                                                             RestrictToBeam=None, IsRobust=False,
+                                                                             RestrictToBeamSet=None, UseRbeDose=False)
+                    dose.DoseFunctionParameters.DoseLevel = contrainte_poumon
+                    dose.DoseFunctionParameters.Weight = weight_poumon
         except:
             print("ça n'a pas marché le truc du poumon, là")
-
-
 
         # Robustesse
         decalage = 1.5  # cm
@@ -912,5 +923,3 @@ if __name__ == '__main__':
                                                                                   PatientGeometryUncertaintyType="PerTreatmentCourse",
                                                                                   PositionUncertaintyType="PerTreatmentCourse",
                                                                                   TreatmentCourseScenariosFactor=1000)
-
-
