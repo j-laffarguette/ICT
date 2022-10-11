@@ -1,11 +1,14 @@
 import os, sys
 import random
 
-pid_file_path = os.path.join(os.environ.get('userprofile'), 'AppData', 'Local', 'Temp', 'raystation.pid')
-with open(pid_file_path) as f:
-    os.environ['RAYSTATION_PID'] = f.read()
-script_client_path = r'C:\Program Files\RaySearch Laboratories\RayStation 11B\ScriptClient'
-sys.path.append(script_client_path)
+try:
+    pid_file_path = os.path.join(os.environ.get('userprofile'), 'AppData', 'Local', 'Temp', 'raystation.pid')
+    with open(pid_file_path) as f:
+        os.environ['RAYSTATION_PID'] = f.read()
+    script_client_path = r'C:\Program Files\RaySearch Laboratories\RayStation 11B\ScriptClient'
+    sys.path.append(script_client_path)
+except:
+    print("")
 
 from connect import *
 import numpy as np
@@ -32,33 +35,43 @@ class Patient:
 
         # Administratif Raystation
         self.case = get_current("Case")
-        self.examination = get_current("Examination")
-        self.exam_name = self.examination.Name
         self.patient = get_current("Patient")
         self.db = get_current("PatientDB")
+
         try:
-            # juste pour différencier les scanners de toulouse des nôtres
-            # (pour le zéro scan à zéro et non pas à hauteur table)
+            # juste pour différencier les scanners de toulouse des nôtres (pour le zéro scan à zéro et non pas à
+            # hauteur table)
             self.doctor = self.case.Physician.Name
         except:
             print('Pas de docteur')
 
         # Récupération des informations des CT (nom + scan position HFS ou FFS)
-        self.examinations = []  # dictionnaire {"exam_name":"FFS/HFS", ...}
-        self.get_ct_list()  # méthode utilisée pour récupérer les données
+        self.examinations = self.get_ct_list()  # dictionnaire {"exam_name":"FFS/HFS", ...}
+
+        # Par défaut, à la première création de l'objet patient, le scanner Head First est pris en primary
         self.set_primary(self.examinations['HFS'])
 
         self.roi_list = []
         self.patient_id = self.patient.PatientID
 
-        # Récupération de la position de tous les POI sur le scanner HFS
+        print('pour débug')
 
+    def set_primary(self, exam_name):
+        """Méthode très importante. Permet de définir un exam en 'primary et d'en récupérer les propriétés.
+         Input : nom de l'examen à mettre en primary"""
+
+        self.case.Examinations[exam_name].SetPrimary()
+        self.examination = get_current("Examination")
+        self.exam_name = self.examination.Name
+
+        # Récupération de la position de tous les POI sur le scanner HFS
         self.jonction = self.get_point_coords('jonction')
         self.pubis = self.get_point_coords('pubis')
         self.genoux = self.get_point_coords('genoux')
         self.cou = self.get_point_coords('cou')
         self.thorax = self.get_point_coords('thorax')
         self.abdomen = self.get_point_coords('abdomen')
+
         # Création du point zero (crane) situé à 0,0,hauteur table (valeur exprimée en mm convertie en cm)
         zero_scan = \
             self.case.Examinations[self.exam_name].GetStoredDicomTagValueForVerification(Group=0x0018, Element=0x1130)[
@@ -71,13 +84,12 @@ class Patient:
             print("Il ne s'agit pas du cas test de toulouse, on utilise donc z = HT")
             self.zero_scan = -float(zero_scan) / 10
 
-        print(self.zero_scan)
-        # todo création des points à la toute fin pour simplification
-        # self.create_poi('crane', self.examinations['HFS'], (0, self.zero_scanHFS, 0))
-        # self.create_poi('jonctionFFS', self.examinations['FFS'], (0, self.zero_scanFFS, 0))
-        # print('')
-
     def get_zero_scan(self, scan_direction):
+        """Méthode permettant de récupérer le zéro du scanner. À noter que sur le scanner siemens somatom, le zéro n'est
+        pas à zéro en antépost, il est situé à (0,0,hauteur table)
+        Input : scan_direction : 'HFS' ou 'FFS'
+        Output: position du zéro en antépost (en cm)
+        """
         zero_scan = \
             self.case.Examinations[self.examinations[scan_direction]].GetStoredDicomTagValueForVerification(
                 Group=0x0018,
@@ -87,14 +99,32 @@ class Patient:
         return -float(zero_scan) / 10
 
     def create_cylinder_ptv(self, roi_name, y_cranial, y_caudal):
+        """Méthode permettant de déterminer le centre du cylindre à partir des coordonnées du point le plus haut et
+        du point le plus bas en longitudinal. Le script est codé de sorte que l'on dise : je veux que le PTV démarre
+        de ce point (ex: bille genoux) et qu'il aille jusqu'à ce point (ex: bille jonction)
+        IMPORTANT : cette méthode appelle la méthode cylindre permettant de créer les PTVS.
+
+        Input : * roi_name = Nom du PTV attendu. Attention, la Roi doit déjà exister dans le roi set
+                * y_cranial : point le plus supérieur du PTV (en cm)
+                * y_caudal : point le plus inférieur (en cm)
+        """
+
         x0, z0 = 0, self.zero_scan
         long = y_cranial - y_caudal  # longueur du volume
         center = y_cranial - long / 2  # centre du volume
         obj_patient.cylinder(roi_name, (x0, z0, center), longueur=abs(long))
 
     def cylinder(self, roi_name, coords, longueur=2, retraction=True):
+        """Création des PTV en utilisant la méthode des cylindres. Un grand cylindre est créé (40cm de rayon dans le
+        plan axial et une longueur par défaut de 2cm dans la direction longitudinale). Le cylindre ainsi créé est ensuite
+        rétracté à la peau de 3 mm afin de créer le PTV final.\n
+        - Inputs : * roi_name = Nom du PTV attendu. Attention, la Roi doit déjà exister dans le roi set.\
+            * coords = coordonnées du centre du cylindre
+            * longueur = 2 : longueur du PTV dans la direction longitudinale (en cm)
+            * rétraction = True : Rétraction ou pas
+        """
         x, y, z = coords
-        self.case.PatientModel.RegionsOfInterest[roi_name].CreateCylinderGeometry(Radius=30,
+        self.case.PatientModel.RegionsOfInterest[roi_name].CreateCylinderGeometry(Radius=40,
                                                                                   Axis={'x': 0, 'y': 0, 'z': 1},
                                                                                   Length=longueur,
                                                                                   Examination=self.examination,
@@ -108,6 +138,9 @@ class Patient:
             self.retraction(roi_name)
 
     def get_point_coords(self, point_name):
+        """ Méthode permettant de récupérer les coordonnées d'un point si celui-ci existe. \n
+        - Input: nom du point \n
+        - Outupt: coordonnées du point (x,y,z) ou None"""
         point = self.case.PatientModel.StructureSets[self.exam_name].PoiGeometries[point_name]
         coords = point.Point
         if coords is not None:
@@ -116,7 +149,8 @@ class Patient:
             return None
 
     def algebra_soustraction(self, roi_a, roi_b):
-        # Simple soustraction entre deux volumes. Écrase le volume de départ. Utilisé pour PTV_B-poumons = PTV_B
+        """ Simple soustraction entre deux volumes. Écrase le volume de départ. Utilisé pour PTV_B-poumons \n
+        - Input : roiA, roiB"""
         self.case.PatientModel.RegionsOfInterest[roi_a].CreateAlgebraGeometry(
             Examination=self.examination, Algorithm="Auto",
             ExpressionA={'Operation': "Union",
@@ -147,6 +181,8 @@ class Patient:
                                   'Right': 0, 'Left': 0})
 
     def algebra_union(self, in_roi, out_roi):
+        """Union de plusieurs volumes dont les noms sont inscrits dans une liste \n
+        - Input: in_roi = [volA,volB,...], out_roi = nom du volume de sorti attendu """
         retval_0 = self.case.PatientModel.RegionsOfInterest[out_roi].SetAlgebraExpression(
             ExpressionA={'Operation': "Union", 'SourceRoiNames': in_roi,
                          'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
@@ -159,31 +195,9 @@ class Patient:
 
         retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
 
-    def set_primary(self, exam_name):
-        self.case.Examinations[exam_name].SetPrimary()
-        self.examination = get_current("Examination")
-        self.exam_name = self.examination.Name
-        # Récupération de la position de tous les POI sur le scanner HFS
-
-        self.jonction = self.get_point_coords('jonction')
-        self.pubis = self.get_point_coords('pubis')
-        self.genoux = self.get_point_coords('genoux')
-        self.cou = self.get_point_coords('cou')
-        self.thorax = self.get_point_coords('thorax')
-        self.abdomen = self.get_point_coords('abdomen')  # todo: ajouter à la procédure
-        # Création du point zero (crane) situé à 0,0,hauteur table (valeur exprimée en mm convertie en cm)
-        zero_scan = \
-            self.case.Examinations[self.exam_name].GetStoredDicomTagValueForVerification(Group=0x0018, Element=0x1130)[
-                'Table Height']
-
-        if self.doctor == 'IZAR^FRANCOISE':  # si c'est le cas de toulouse, on prend zéro
-            print("Il s'agit du cas test de toulouse, on utilise donc z = 0")
-            self.zero_scan = 0
-        else:
-            print("Il ne s'agit pas du cas test de toulouse, on utilise donc z = HT")
-            self.zero_scan = -float(zero_scan) / 10
-
     def get_ct_list(self):
+        """ Méthode permettant de récupérer les noms des scanners en fonction de leur position (HFS ou FFS).
+         Output: self.examinations = dictionnaire {"nom_duCT_HFS":"HFS", "nom_duCT_FFS":"FFS"}"""
         examinations = {}
         for exam in self.case.Examinations:
             if exam.EquipmentInfo.Modality == 'CT':
@@ -191,37 +205,8 @@ class Patient:
         self.examinations = examinations
         return self.examinations
 
-    def get_irm_list(self):
-        name, modality = [], []
-        for exam in self.case.Examinations:
-            if exam.EquipmentInfo.Modality == 'MR':
-                name.append(exam.Name)
-                modality.append(exam.GetProtocolName())
-        self.irm_names = list(zip(name, modality))
-        return self.irm_names
-
-    def get_dixon_name(self):
-        irm_list = self.get_irm_list()
-        for irm in irm_list:
-            irm_name = irm[0]
-            irm_modality = irm[1]
-            if "DIXON" in irm_modality and "RESPI LIBRE GADO TARDIF" in irm_modality:
-                self.dixon_name.append(irm_name)
-                print(irm_name)
-        return self.dixon_name
-
-    def get_roi_list(self):
-        rois = self.case.PatientModel.RegionsOfInterest
-        self.roi_list = [roi.Name for roi in rois]
-        return self.roi_list
-
-    def get_description(self, imageName):
-        description = self.case.Examinations[imageName].GetStoredDicomTagValueForVerification(Group=0x0008,
-                                                                                              Element=0x103E)
-        description = description.__getitem__("SeriesDescription")
-        return description
-
     def create_ROI(self, roi_name, roi_type='Ptv'):
+        """Méthode utilisée pour créer des volumes de type PTV"""
         color = ["#" + ''.join([random.choice('ABCDEF0123456789') for i in range(6)])][0]
         self.case.PatientModel.CreateRoi(Name=roi_name, Color=color, Type=roi_type)
 
@@ -241,6 +226,10 @@ class Patient:
             self.retraction(roi_name)
 
     def retraction(self, roi_name):
+        """Réalise la rétraction à la peau de 3 mm sur le volume demandé.
+        Input : roi_name = nom du volume à rétracter"""
+
+        marge = 0.3  # cm
         self.case.PatientModel.RegionsOfInterest[roi_name].CreateAlgebraGeometry(Examination=self.examination,
                                                                                  Algorithm="Auto",
                                                                                  ExpressionA={'Operation': "Union",
@@ -259,12 +248,12 @@ class Patient:
                                                                                                   "External"],
                                                                                               'MarginSettings': {
                                                                                                   'Type': "Contract",
-                                                                                                  'Superior': 0.3,
-                                                                                                  'Inferior': 0.3,
-                                                                                                  'Anterior': 0.3,
-                                                                                                  'Posterior': 0.3,
-                                                                                                  'Right': 0.3,
-                                                                                                  'Left': 0.3}},
+                                                                                                  'Superior': marge,
+                                                                                                  'Inferior': marge,
+                                                                                                  'Anterior': marge,
+                                                                                                  'Posterior': marge,
+                                                                                                  'Right': marge,
+                                                                                                  'Left': marge}},
                                                                                  ResultOperation="Intersection",
                                                                                  ResultMarginSettings={'Type': "Expand",
                                                                                                        'Superior': 0,
@@ -275,6 +264,8 @@ class Patient:
                                                                                                        'Left': 0})
 
     def generate_poumons(self):
+        """Méthode utilisée pour réaliser l'union du poumon G et du poumon D"""
+        # todo: généraliser pour n'utiliser que la méthode union
         if not check_roi(self.case, 'Poumons'):
             self.case.PatientModel.CreateRoi(Name="Poumons", Color="Aqua", Type="Organ", TissueName=None,
                                              RbeCellTypeName=None, RoiMaterial=None)
@@ -291,6 +282,8 @@ class Patient:
         retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
 
     def generate_reins(self):
+        """Méthode utilisée pour réaliser l'union du rein G et du rein D"""
+        # todo: généraliser pour n'utiliser que la méthode union
         if not check_roi(self.case, 'Reins'):
             self.case.PatientModel.CreateRoi(Name="Reins", Color="Yellow", Type="Organ", TissueName=None,
                                              RbeCellTypeName=None, RoiMaterial=None)
@@ -307,6 +300,8 @@ class Patient:
         retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
 
     def generate_ptv_poumons(self):
+        """Méthode utilisée pour faire PTVpoumons = Poumons contractés de 1 cm"""
+
         if not check_roi(self.case, 'PTVpoumons'):
             self.create_ROI('PTVpoumons')
         retval_1 = self.case.PatientModel.RegionsOfInterest['PTVpoumons'].SetAlgebraExpression(
@@ -325,6 +320,13 @@ class Patient:
         retval_1.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
 
     def create_poi(self, poi_name, coords, color="128, 128, 255"):
+        """Méthode utilisée pour créer des points (exemple: laser rouge et laser vert). Si le point n'est pas présent
+        dans la poi list, le point est créé, sinon ses coordonnées sont modifiées
+
+        Input:  * poi_name : nom du point
+                * coords : coordonnées du point
+                * color : couleur données au point (soit en valeurs RGB soit 'Yellow')
+                """
         x, y, z = coords
         poi_list = [poi.Name for poi in self.case.PatientModel.PointsOfInterest]
         if not poi_name in poi_list:
@@ -340,8 +342,8 @@ class Patient:
 if __name__ == '__main__':
 
     # todo: contour automatique du contour externe. Impossible pour l'heure à cause de l'absence de densités
-    # todo: faire soustraction PTVD6 - PTVD5
 
+    # Création de l'objet patient. Définit par défaut le scanner HFS en primary
     obj_patient = Patient()
 
     do_it = True
@@ -576,35 +578,35 @@ if __name__ == '__main__':
                                                                    RbeCellTypeName=None, RoiMaterial=None)
 
             # génération du volume d'optimisation par simple Algebra and marging
-            obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].CreateAlgebraGeometry(Examination=obj_patient.examination,
-                                                                                      Algorithm="Auto",
-                                                                                      ExpressionA={'Operation': "Union",
-                                                                                                   'SourceRoiNames': [source],
-                                                                                                   'MarginSettings': {
-                                                                                                       'Type': "Expand",
-                                                                                                       'Superior': 0,
-                                                                                                       'Inferior': 0,
-                                                                                                       'Anterior': 0,
-                                                                                                       'Posterior': 0,
-                                                                                                       'Right': 0,
-                                                                                                       'Left': 0}},
-                                                                                      ExpressionB={'Operation': "Union",
-                                                                                                   'SourceRoiNames': [],
-                                                                                                   'MarginSettings': {
-                                                                                                       'Type': "Expand",
-                                                                                                       'Superior': 0,
-                                                                                                       'Inferior': 0,
-                                                                                                       'Anterior': 0,
-                                                                                                       'Posterior': 0,
-                                                                                                       'Right': 0,
-                                                                                                       'Left': 0}},
-                                                                                      ResultOperation="None",
-                                                                                      ResultMarginSettings={
-                                                                                          'Type': "Expand",
-                                                                                          'Superior': 0, 'Inferior': 0,
-                                                                                          'Anterior': 0, 'Posterior': 0,
-                                                                                          'Right': 0, 'Left': 0})
-
+            obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].CreateAlgebraGeometry(
+                Examination=obj_patient.examination,
+                Algorithm="Auto",
+                ExpressionA={'Operation': "Union",
+                             'SourceRoiNames': [source],
+                             'MarginSettings': {
+                                 'Type': "Expand",
+                                 'Superior': 0,
+                                 'Inferior': 0,
+                                 'Anterior': 0,
+                                 'Posterior': 0,
+                                 'Right': 0,
+                                 'Left': 0}},
+                ExpressionB={'Operation': "Union",
+                             'SourceRoiNames': [],
+                             'MarginSettings': {
+                                 'Type': "Expand",
+                                 'Superior': 0,
+                                 'Inferior': 0,
+                                 'Anterior': 0,
+                                 'Posterior': 0,
+                                 'Right': 0,
+                                 'Left': 0}},
+                ResultOperation="None",
+                ResultMarginSettings={
+                    'Type': "Expand",
+                    'Superior': 0, 'Inferior': 0,
+                    'Anterior': 0, 'Posterior': 0,
+                    'Right': 0, 'Left': 0})
 
     #########################################################################
     #########################################################################
@@ -946,8 +948,8 @@ if __name__ == '__main__':
         # elles sont remplies ensuite
         for roi in ptv_list:
 
-            liste = ["PTV haut","PTVpoumons","PTV_D6","PTV_E"]
-            if any(roi in s for s in liste): # On ne met l'uniform dose que sur ces volumes là
+            liste = ["PTV haut", "PTVpoumons", "PTV_D6", "PTV_E"]
+            if any(roi in s for s in liste):  # On ne met l'uniform dose que sur ces volumes là
                 plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="UniformDose", RoiName=str(roi),
                                                                   IsConstraint=False,
                                                                   RestrictAllBeamsIndividually=False,
@@ -1006,7 +1008,8 @@ if __name__ == '__main__':
                                                                                  IsConstraint=False,
                                                                                  RestrictAllBeamsIndividually=False,
                                                                                  RestrictToBeam=None, IsRobust=False,
-                                                                                 RestrictToBeamSet=None, UseRbeDose=False)
+                                                                                 RestrictToBeamSet=None,
+                                                                                 UseRbeDose=False)
                         dose.DoseFunctionParameters.DoseLevel = contrainte_reins
                         dose.DoseFunctionParameters.Weight = weight_reins
         except:
