@@ -51,9 +51,6 @@ class Patient:
         # Par défaut, à la première création de l'objet patient, le scanner Head First est pris en primary
         self.set_primary(self.examinations['HFS'])
 
-        self.roi_list = []
-        self.patient_id = self.patient.PatientID
-
         print('pour débug')
 
     def set_primary(self, exam_name):
@@ -112,7 +109,7 @@ class Patient:
         x0, z0 = 0, self.zero_scan
         long = y_cranial - y_caudal  # longueur du volume
         center = y_cranial - long / 2  # centre du volume
-        obj_patient.cylinder(roi_name, (x0, z0, center), longueur=abs(long))
+        self.cylinder(roi_name, (x0, z0, center), longueur=abs(long))
 
     def cylinder(self, roi_name, coords, longueur=2, retraction=True):
         """Création des PTV en utilisant la méthode des cylindres. Un grand cylindre est créé (40cm de rayon dans le
@@ -209,21 +206,6 @@ class Patient:
         """Méthode utilisée pour créer des volumes de type PTV"""
         color = ["#" + ''.join([random.choice('ABCDEF0123456789') for i in range(6)])][0]
         self.case.PatientModel.CreateRoi(Name=roi_name, Color=color, Type=roi_type)
-
-    def cylinder(self, roi_name, coords, longueur=2, retraction=True):
-        x, y, z = coords
-        self.case.PatientModel.RegionsOfInterest[roi_name].CreateCylinderGeometry(Radius=30,
-                                                                                  Axis={'x': 0, 'y': 0, 'z': 1},
-                                                                                  Length=longueur,
-                                                                                  Examination=self.examination,
-                                                                                  Center={'x': x,
-                                                                                          'y': y,
-                                                                                          'z': z},
-                                                                                  Representation="TriangleMesh",
-                                                                                  VoxelSize=None)
-
-        if retraction:
-            self.retraction(roi_name)
 
     def retraction(self, roi_name):
         """Réalise la rétraction à la peau de 3 mm sur le volume demandé.
@@ -428,6 +410,7 @@ if __name__ == '__main__':
         # Travail sur les volumes
 
         # copie des structures de table du scanner HFS vers le FFS
+        # todo: résoudre le problème qui fait que les structures de table sont coupées lors de la copy du HFS vers le FFS
         obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
                                                         TargetExaminationNames=[obj_patient.examinations["FFS"]],
                                                         RoiNames=["Mousse", "Renfort interne POM 1.4", "Nylon 1.15",
@@ -846,7 +829,7 @@ if __name__ == '__main__':
         elif direction == 'FFS':
 
             try:
-                beam_names = ['Ant', 'G', 'Post', 'D']
+                beam_names = ['Ant', 'Droit', 'Post', 'Gauche']
                 angles = [0, 90, 180, 270]
 
                 for beam_name, angle in zip(beam_names, angles):
