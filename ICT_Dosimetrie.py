@@ -50,7 +50,6 @@ class Patient:
 
         # Par défaut, à la première création de l'objet patient, le scanner Head First est pris en primary
         self.set_primary(self.examinations['HFS'])
-
         print('pour débug')
 
     def set_primary(self, exam_name):
@@ -132,7 +131,8 @@ class Patient:
                                                                                   VoxelSize=None)
 
         if retraction:
-            self.retraction(roi_name)
+            self.algebra(out_roi=roi_name, in_roiA=[roi_name], in_roiB=["External"], margeB=-0.3,
+                         ResultOperation="Intersection", derive=False)
 
     def get_point_coords(self, point_name):
         """ Méthode permettant de récupérer les coordonnées d'un point si celui-ci existe. \n
@@ -145,52 +145,56 @@ class Patient:
         else:
             return None
 
-    def algebra_soustraction(self, roi_a, roi_b):
-        """ Simple soustraction entre deux volumes. Écrase le volume de départ. Utilisé pour PTV_B-poumons \n
-        - Input : roiA, roiB"""
-        self.case.PatientModel.RegionsOfInterest[roi_a].CreateAlgebraGeometry(
-            Examination=self.examination, Algorithm="Auto",
-            ExpressionA={'Operation': "Union",
-                         'SourceRoiNames': [roi_a],
-                         'MarginSettings': {
-                             'Type': "Expand",
-                             'Superior': 0,
-                             'Inferior': 0,
-                             'Anterior': 0,
-                             'Posterior': 0, 'Right': 0,
-                             'Left': 0}},
-            ExpressionB={'Operation': "Union",
-                         'SourceRoiNames': [
-                             roi_b],
-                         'MarginSettings': {
-                             'Type': "Expand",
-                             'Superior': 0,
-                             'Inferior': 0,
-                             'Anterior': 0,
-                             'Posterior': 0, 'Right': 0,
-                             'Left': 0}},
-            ResultOperation="Subtraction",
-            ResultMarginSettings={'Type': "Expand",
-                                  'Superior': 0,
-                                  'Inferior': 0,
-                                  'Anterior': 0,
-                                  'Posterior': 0,
-                                  'Right': 0, 'Left': 0})
+    def algebra(self, out_roi, in_roiA=[], in_roiB=[], margeA=0, margeB=0, color='Blue', ResultOperation='None',
+                Type="Organ", derive=True):
+        """Méthode permettant de réaliser des algebra and marging de manière quasi généralisée """
 
-    def algebra_union(self, in_roi, out_roi):
-        """Union de plusieurs volumes dont les noms sont inscrits dans une liste \n
-        - Input: in_roi = [volA,volB,...], out_roi = nom du volume de sorti attendu """
-        retval_0 = self.case.PatientModel.RegionsOfInterest[out_roi].SetAlgebraExpression(
-            ExpressionA={'Operation': "Union", 'SourceRoiNames': in_roi,
-                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
-                                            'Posterior': 0, 'Right': 0, 'Left': 0}},
-            ExpressionB={'Operation': "Union", 'SourceRoiNames': [],
-                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
-                                            'Posterior': 0, 'Right': 0, 'Left': 0}}, ResultOperation="None",
-            ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
-                                  'Right': 0, 'Left': 0})
+        if not check_roi(self.case, out_roi):
+            self.case.PatientModel.CreateRoi(Name=out_roi, Color=color, Type=Type, TissueName=None,
+                                             RbeCellTypeName=None, RoiMaterial=None)
 
-        retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
+        if margeA < 0:
+            typeA = 'Contract'
+            margeA = abs(margeA)
+        else:
+            typeA = 'Expand'
+
+        if margeB < 0:
+            typeB = 'Contract'
+            margeB = abs(margeB)
+        else:
+            typeB = 'Expand'
+
+        if derive:
+            retval_0 = self.case.PatientModel.RegionsOfInterest[out_roi].SetAlgebraExpression(
+                ExpressionA={'Operation': "Union", 'SourceRoiNames': in_roiA,
+                             'MarginSettings': {'Type': typeA, 'Superior': margeA, 'Inferior': margeA,
+                                                'Anterior': margeA,
+                                                'Posterior': margeA, 'Right': margeA, 'Left': margeA}},
+                ExpressionB={'Operation': "Union", 'SourceRoiNames': in_roiB,
+                             'MarginSettings': {'Type': typeB, 'Superior': margeB, 'Inferior': margeB,
+                                                'Anterior': margeB,
+                                                'Posterior': margeB, 'Right': margeB, 'Left': margeB}},
+                ResultOperation=ResultOperation,
+                ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
+                                      'Right': 0, 'Left': 0})
+
+            retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
+
+        else:
+            self.case.PatientModel.RegionsOfInterest[out_roi].CreateAlgebraGeometry(
+                Examination=self.examination, Algorithm="Auto",
+                ExpressionA={'Operation': "Union", 'SourceRoiNames': in_roiA,
+                             'MarginSettings': {'Type': typeA, 'Superior': margeA, 'Inferior': margeA,
+                                                'Anterior': margeA,
+                                                'Posterior': margeA, 'Right': margeA, 'Left': margeA}},
+                ExpressionB={'Operation': "Union", 'SourceRoiNames': in_roiB,
+                             'MarginSettings': {'Type': typeB, 'Superior': margeB, 'Inferior': margeB,
+                                                'Anterior': margeB,
+                                                'Posterior': margeB, 'Right': margeB, 'Left': margeB}},
+                ResultOperation=ResultOperation,
+                ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
+                                      'Right': 0, 'Left': 0})
 
     def get_ct_list(self):
         """ Méthode permettant de récupérer les noms des scanners en fonction de leur position (HFS ou FFS).
@@ -206,100 +210,6 @@ class Patient:
         """Méthode utilisée pour créer des volumes de type PTV"""
         color = ["#" + ''.join([random.choice('ABCDEF0123456789') for i in range(6)])][0]
         self.case.PatientModel.CreateRoi(Name=roi_name, Color=color, Type=roi_type)
-
-    def retraction(self, roi_name):
-        """Réalise la rétraction à la peau de 3 mm sur le volume demandé.
-        Input : roi_name = nom du volume à rétracter"""
-
-        marge = 0.3  # cm
-        self.case.PatientModel.RegionsOfInterest[roi_name].CreateAlgebraGeometry(Examination=self.examination,
-                                                                                 Algorithm="Auto",
-                                                                                 ExpressionA={'Operation': "Union",
-                                                                                              'SourceRoiNames': [
-                                                                                                  roi_name],
-                                                                                              'MarginSettings': {
-                                                                                                  'Type': "Expand",
-                                                                                                  'Superior': 0,
-                                                                                                  'Inferior': 0,
-                                                                                                  'Anterior': 0,
-                                                                                                  'Posterior': 0,
-                                                                                                  'Right': 0,
-                                                                                                  'Left': 0}},
-                                                                                 ExpressionB={'Operation': "Union",
-                                                                                              'SourceRoiNames': [
-                                                                                                  "External"],
-                                                                                              'MarginSettings': {
-                                                                                                  'Type': "Contract",
-                                                                                                  'Superior': marge,
-                                                                                                  'Inferior': marge,
-                                                                                                  'Anterior': marge,
-                                                                                                  'Posterior': marge,
-                                                                                                  'Right': marge,
-                                                                                                  'Left': marge}},
-                                                                                 ResultOperation="Intersection",
-                                                                                 ResultMarginSettings={'Type': "Expand",
-                                                                                                       'Superior': 0,
-                                                                                                       'Inferior': 0,
-                                                                                                       'Anterior': 0,
-                                                                                                       'Posterior': 0,
-                                                                                                       'Right': 0,
-                                                                                                       'Left': 0})
-
-    def generate_poumons(self):
-        """Méthode utilisée pour réaliser l'union du poumon G et du poumon D"""
-        # todo: généraliser pour n'utiliser que la méthode union
-        if not check_roi(self.case, 'Poumons'):
-            self.case.PatientModel.CreateRoi(Name="Poumons", Color="Aqua", Type="Organ", TissueName=None,
-                                             RbeCellTypeName=None, RoiMaterial=None)
-
-        retval_0 = self.case.PatientModel.RegionsOfInterest['Poumons'].SetAlgebraExpression(
-            ExpressionA={'Operation': "Union", 'SourceRoiNames': ["Poumon D", "Poumon G"],
-                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
-                                            'Posterior': 0, 'Right': 0, 'Left': 0}},
-            ExpressionB={'Operation': "Union", 'SourceRoiNames': [],
-                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
-                                            'Posterior': 0, 'Right': 0, 'Left': 0}}, ResultOperation="None",
-            ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
-                                  'Right': 0, 'Left': 0})
-        retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
-
-    def generate_reins(self):
-        """Méthode utilisée pour réaliser l'union du rein G et du rein D"""
-        # todo: généraliser pour n'utiliser que la méthode union
-        if not check_roi(self.case, 'Reins'):
-            self.case.PatientModel.CreateRoi(Name="Reins", Color="Yellow", Type="Organ", TissueName=None,
-                                             RbeCellTypeName=None, RoiMaterial=None)
-
-        retval_0 = self.case.PatientModel.RegionsOfInterest['Reins'].SetAlgebraExpression(
-            ExpressionA={'Operation': "Union", 'SourceRoiNames': ["Rein D", "Rein G"],
-                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
-                                            'Posterior': 0, 'Right': 0, 'Left': 0}},
-            ExpressionB={'Operation': "Union", 'SourceRoiNames': [],
-                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
-                                            'Posterior': 0, 'Right': 0, 'Left': 0}}, ResultOperation="None",
-            ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
-                                  'Right': 0, 'Left': 0})
-        retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
-
-    def generate_ptv_poumons(self):
-        """Méthode utilisée pour faire PTVpoumons = Poumons contractés de 1 cm"""
-
-        if not check_roi(self.case, 'PTVpoumons'):
-            self.create_ROI('PTVpoumons')
-        retval_1 = self.case.PatientModel.RegionsOfInterest['PTVpoumons'].SetAlgebraExpression(
-            ExpressionA={'Operation': "Union", 'SourceRoiNames': ["Poumons"],
-                         'MarginSettings': {'Type': "Contract", 'Superior': 1, 'Inferior': 1, 'Anterior': 1,
-                                            'Posterior': 1,
-                                            'Right': 1, 'Left': 1}},
-            ExpressionB={'Operation': "Union", 'SourceRoiNames': [],
-                         'MarginSettings': {'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0,
-                                            'Posterior': 0,
-                                            'Right': 0, 'Left': 0}}, ResultOperation="None",
-            ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
-                                  'Right': 0,
-                                  'Left': 0})
-
-        retval_1.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
 
     def create_poi(self, poi_name, coords, color="128, 128, 255"):
         """Méthode utilisée pour créer des points (exemple: laser rouge et laser vert). Si le point n'est pas présent
@@ -328,8 +238,8 @@ if __name__ == '__main__':
     # Création de l'objet patient. Définit par défaut le scanner HFS en primary
     obj_patient = Patient()
 
+    # do_it est mis sur False pour passer toute la partie Patient Modeling pour la programmation du script
     do_it = True
-
     if do_it:
         #########################################################################
         #########################################################################
@@ -337,75 +247,78 @@ if __name__ == '__main__':
         #########################################################################
         #########################################################################
 
-        # Première partie, réalisation du recalage rigide
-        # Suppression pure et simple de tous les FOR registration déjà existants
-        for reg in obj_patient.case.Registrations:
-            FFOR = reg.FromFrameOfReference
-            RFOR = reg.ToFrameOfReference
-            obj_patient.case.RemoveFrameOfReferenceRegistration(
-                FloatingFrameOfReference=FFOR,
-                ReferenceFrameOfReference=RFOR)
+        if False:
+            # Première partie, réalisation du recalage rigide
+            # Suppression pure et simple de tous les FOR registration déjà existants
+            for reg in obj_patient.case.Registrations:
+                FFOR = reg.FromFrameOfReference
+                RFOR = reg.ToFrameOfReference
+                obj_patient.case.RemoveFrameOfReferenceRegistration(
+                    FloatingFrameOfReference=FFOR,
+                    ReferenceFrameOfReference=RFOR)
 
-        # Création du recalage entre le scanner FFS et le scanner HFS
-        # 1. création du for reg
-        obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
-            FromExaminationName=obj_patient.examinations['HFS'], ToExaminationName=obj_patient.examinations['FFS'],
-            RegistrationName="HFS to FFS", Description=None)
+            # Création du recalage entre le scanner FFS et le scanner HFS
+            # 1. création du for reg
+            obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
+                FromExaminationName=obj_patient.examinations['HFS'], ToExaminationName=obj_patient.examinations['FFS'],
+                RegistrationName="HFS to FFS", Description=None)
 
-        # recalage automatique
-        obj_patient.case.ComputeGrayLevelBasedRigidRegistration(FloatingExaminationName=obj_patient.examinations['HFS'],
-                                                                ReferenceExaminationName=obj_patient.examinations[
-                                                                    'FFS'],
-                                                                UseOnlyTranslations=True, HighWeightOnBones=True,
-                                                                InitializeImages=True, FocusRoisNames=[],
-                                                                RegistrationName=None)
+            # recalage automatique
+            obj_patient.case.ComputeGrayLevelBasedRigidRegistration(
+                FloatingExaminationName=obj_patient.examinations['HFS'],
+                ReferenceExaminationName=obj_patient.examinations[
+                    'FFS'],
+                UseOnlyTranslations=True, HighWeightOnBones=True,
+                InitializeImages=True, FocusRoisNames=[],
+                RegistrationName=None)
 
-        # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity avec la
-        # vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
+            # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity avec la
+            # vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
 
-        obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
+            obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
+                                                            TargetExaminationNames=[obj_patient.examinations['FFS']],
+                                                            RoiNames=["Vessie"], ImageRegistrationNames=[],
+                                                            TargetExaminationNamesToSkipAddedReg=[
+                                                                obj_patient.examinations['FFS']])
+
+            # Création du recalage élastique rigide
+            reg_name = "elastique rigide"
+            obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
+                                                                                  ReferenceExaminationName=
+                                                                                  obj_patient.examinations['HFS'],
+                                                                                  TargetExaminationNames=[
+                                                                                      obj_patient.examinations["FFS"]],
+                                                                                  ControllingRoiNames=["Vessie"],
+                                                                                  ControllingPoiNames=[],
+                                                                                  FocusRoiNames=[],
+                                                                                  AlgorithmSettings={
+                                                                                      'NumberOfResolutionLevels': 1,
+                                                                                      'InitialResolution': {'x': 0.5,
+                                                                                                            'y': 0.5,
+                                                                                                            'z': 0.5},
+                                                                                      'FinalResolution': {'x': 0.25,
+                                                                                                          'y': 0.25,
+                                                                                                          'z': 0.5},
+                                                                                      'InitialGaussianSmoothingSigma': 2,
+                                                                                      'FinalGaussianSmoothingSigma': 0.333333333333333,
+                                                                                      'InitialGridRegularizationWeight': 400,
+                                                                                      'FinalGridRegularizationWeight': 400,
+                                                                                      'ControllingRoiWeight': 0.5,
+                                                                                      'ControllingPoiWeight': 0.1,
+                                                                                      'MaxNumberOfIterationsPerResolutionLevel': 1000,
+                                                                                      'ImageSimilarityMeasure': "None",
+                                                                                      'DeformationStrategy': "Default",
+                                                                                      'ConvergenceTolerance': 1E-05})
+
+            # mapping des POI d'un scanner vers l'autre
+            pois = ["jonction", "genoux", "pubis", "abdomen"]
+
+            obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
+                                                        CreateNewPois=False,
+                                                        StructureRegistrationGroupNames=[reg_name],
+                                                        ReferenceExaminationNames=[obj_patient.examinations['HFS']],
                                                         TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                        RoiNames=["Vessie"], ImageRegistrationNames=[],
-                                                        TargetExaminationNamesToSkipAddedReg=[
-                                                            obj_patient.examinations['FFS']])
-
-        # Création du recalage élastique rigide
-        reg_name = "elastique rigide"
-        obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
-                                                                              ReferenceExaminationName=
-                                                                              obj_patient.examinations['HFS'],
-                                                                              TargetExaminationNames=[
-                                                                                  obj_patient.examinations["FFS"]],
-                                                                              ControllingRoiNames=["Vessie"],
-                                                                              ControllingPoiNames=[], FocusRoiNames=[],
-                                                                              AlgorithmSettings={
-                                                                                  'NumberOfResolutionLevels': 1,
-                                                                                  'InitialResolution': {'x': 0.5,
-                                                                                                        'y': 0.5,
-                                                                                                        'z': 0.5},
-                                                                                  'FinalResolution': {'x': 0.25,
-                                                                                                      'y': 0.25,
-                                                                                                      'z': 0.5},
-                                                                                  'InitialGaussianSmoothingSigma': 2,
-                                                                                  'FinalGaussianSmoothingSigma': 0.333333333333333,
-                                                                                  'InitialGridRegularizationWeight': 400,
-                                                                                  'FinalGridRegularizationWeight': 400,
-                                                                                  'ControllingRoiWeight': 0.5,
-                                                                                  'ControllingPoiWeight': 0.1,
-                                                                                  'MaxNumberOfIterationsPerResolutionLevel': 1000,
-                                                                                  'ImageSimilarityMeasure': "None",
-                                                                                  'DeformationStrategy': "Default",
-                                                                                  'ConvergenceTolerance': 1E-05})
-
-        # mapping des POI d'un scanner vers l'autre
-        pois = ["jonction", "genoux", "pubis", "abdomen"]
-
-        obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
-                                                    CreateNewPois=False,
-                                                    StructureRegistrationGroupNames=[reg_name],
-                                                    ReferenceExaminationNames=[obj_patient.examinations['HFS']],
-                                                    TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                    ReverseMapping=False, AbortWhenBadDisplacementField=False)
+                                                        ReverseMapping=False, AbortWhenBadDisplacementField=False)
 
         # Travail sur les volumes
 
@@ -451,14 +364,14 @@ if __name__ == '__main__':
                                                                                   ResolveOverlappingContours=True)
 
             # créer poumon G+D
-            obj_patient.generate_poumons()
+            obj_patient.algebra(out_roi="Poumons", in_roiA=["Poumon D", "Poumon G"], color="Aqua")
 
             # créer somme des reins
-            obj_patient.generate_reins()
+            obj_patient.algebra(out_roi="Reins", in_roiA=["Rein D", "Rein G"], color="Yellow")
 
             # Création PTVpoumons = poumons - 1cm # seulement pour le scanner HFS!
             if direction == 'HFS':
-                obj_patient.generate_ptv_poumons()
+                obj_patient.algebra(out_roi='PTVpoumons', in_roiA=["Poumons"], margeA=-1, Type="Ptv", color="Yellow")
 
             # ------------------------------------------------------------------------------------
             # Création des cylindres
@@ -499,7 +412,7 @@ if __name__ == '__main__':
                 # Réalisation du PTV B : au dessus du PTV C jusqu'à la bille cou
                 # Edit 18/08/2022 -> soustraction des poumons
                 _, _, y_cou = obj_patient.cou
-                obj_patient.algebra_soustraction('PTV_B', "PTVpoumons")
+                # obj_patient.algebra_soustraction('PTV_B', "PTVpoumons")
 
                 # Réalisation du PTV A : au dessus du PTV B
                 tout_en_haut = y_cou + 50
@@ -508,14 +421,13 @@ if __name__ == '__main__':
                 from_to.append(['PTV_B', y_cou, sous_poumons])
                 from_to.append(['PTV_A', tout_en_haut, y_cou])
 
-
             elif direction == 'FFS':
                 # Réalisation du PTV E : en dessous du PTV E
                 tout_en_bas = y_genoux - 100
 
                 from_to.append(['PTV_E', y_genoux, tout_en_bas])
 
-            # Une fois que toutes les bornes sont déterminées, on créé les PTVS
+            # Une fois que toutes les bornes sont déterminées, on crée les PTVS
             for roi, f, t in from_to:
                 print(f'Création du PTV suivant : {roi} entre y = {str(f)} et y = {str(t)} ')
                 obj_patient.create_cylinder_ptv(roi, f, t)
@@ -524,15 +436,18 @@ if __name__ == '__main__':
             # Update de la dérivation du PTV poumons
             obj_patient.case.PatientModel.RegionsOfInterest['PTVpoumons'].UpdateDerivedGeometry(Examination=ct,
                                                                                                 Algorithm="Auto")
+            # PTVB - PTVPoumons = PTVB
+            obj_patient.algebra(out_roi='PTV_B', in_roiA=["PTV_B"], in_roiB=["PTVpoumons"],
+                                ResultOperation="Subtraction", derive=False)
 
             # Dernière étape: soustraction des volumes deux à deux pour éviter le chevauchement des PTVS
             ROI_LIST = ['PTV_E', 'PTV_D6', 'PTV_D5', 'PTV_D4', 'PTV_D3', 'PTV_D2', 'PTV_D1', 'PTV_C', 'PTV_B', 'PTV_A']
             for i in range(len(ROI_LIST) - 1):
-                obj_patient.algebra_soustraction(ROI_LIST[i], ROI_LIST[i + 1])
-
+                obj_patient.algebra(out_roi=ROI_LIST[i], in_roiA=[ROI_LIST[i]], in_roiB=[ROI_LIST[i + 1]],
+                                    ResultOperation="Subtraction", derive=False)
             if direction == 'HFS':
                 # Finalement, création du PTV haut, qui sera utilisé seul
-                obj_patient.algebra_union(['PTV_A', 'PTV_B', 'PTV_C', 'PTV_D1'], 'PTV haut')
+                obj_patient.algebra(in_roiA=['PTV_A', 'PTV_B', 'PTV_C', 'PTV_D1'], out_roi='PTV haut')
 
             # simplification des volumes pour éviter overlaps
             roi_list = [roi.Name for roi in obj_patient.case.PatientModel.RegionsOfInterest if roi.Type == "Support"]
@@ -554,42 +469,9 @@ if __name__ == '__main__':
                 source = "PTV_D1"
                 OAR_name = "opt_jonction"
 
-            # on regarde si le volume existe déjà. Sinon on le crée
-            if not check_roi(obj_patient.case, OAR_name):
-                retval_0 = obj_patient.case.PatientModel.CreateRoi(Name=OAR_name, Color="Magenta", Type="Organ",
-                                                                   TissueName=None,
-                                                                   RbeCellTypeName=None, RoiMaterial=None)
+            # Création du volume
+            obj_patient.algebra(out_roi=OAR_name, in_roiA=[source], color='Magenta', Type="Organ")
 
-            # génération du volume d'optimisation par simple Algebra and marging
-            obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].CreateAlgebraGeometry(
-                Examination=obj_patient.examination,
-                Algorithm="Auto",
-                ExpressionA={'Operation': "Union",
-                             'SourceRoiNames': [source],
-                             'MarginSettings': {
-                                 'Type': "Expand",
-                                 'Superior': 0,
-                                 'Inferior': 0,
-                                 'Anterior': 0,
-                                 'Posterior': 0,
-                                 'Right': 0,
-                                 'Left': 0}},
-                ExpressionB={'Operation': "Union",
-                             'SourceRoiNames': [],
-                             'MarginSettings': {
-                                 'Type': "Expand",
-                                 'Superior': 0,
-                                 'Inferior': 0,
-                                 'Anterior': 0,
-                                 'Posterior': 0,
-                                 'Right': 0,
-                                 'Left': 0}},
-                ResultOperation="None",
-                ResultMarginSettings={
-                    'Type': "Expand",
-                    'Superior': 0, 'Inferior': 0,
-                    'Anterior': 0, 'Posterior': 0,
-                    'Right': 0, 'Left': 0})
 
     #########################################################################
     #########################################################################
