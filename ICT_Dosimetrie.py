@@ -153,6 +153,8 @@ class Patient:
             self.case.PatientModel.CreateRoi(Name=out_roi, Color=color, Type=Type, TissueName=None,
                                              RbeCellTypeName=None, RoiMaterial=None)
 
+        # Ici, l'utilisateur entre une valeur réelle. Si elle est négative, RS demande à ce qu'elle soit positive avec
+        # comme type : 'contract'
         if margeA < 0:
             typeA = 'Contract'
             margeA = abs(margeA)
@@ -165,6 +167,7 @@ class Patient:
         else:
             typeB = 'Expand'
 
+        # Si le volume de sortie dérive des volumes en entrée
         if derive:
             retval_0 = self.case.PatientModel.RegionsOfInterest[out_roi].SetAlgebraExpression(
                 ExpressionA={'Operation': "Union", 'SourceRoiNames': in_roiA,
@@ -181,6 +184,7 @@ class Patient:
 
             retval_0.UpdateDerivedGeometry(Examination=self.examination, Algorithm="Auto")
 
+        # Si le volume de sortie ne dérive pas.
         else:
             self.case.PatientModel.RegionsOfInterest[out_roi].CreateAlgebraGeometry(
                 Examination=self.examination, Algorithm="Auto",
@@ -412,7 +416,7 @@ if __name__ == '__main__':
                 # Réalisation du PTV B : au dessus du PTV C jusqu'à la bille cou
                 # Edit 18/08/2022 -> soustraction des poumons
                 _, _, y_cou = obj_patient.cou
-                # obj_patient.algebra_soustraction('PTV_B', "PTVpoumons")
+
 
                 # Réalisation du PTV A : au dessus du PTV B
                 tout_en_haut = y_cou + 50
