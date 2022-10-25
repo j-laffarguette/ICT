@@ -347,7 +347,7 @@ if __name__ == '__main__':
         to_do = ['HFS', 'FFS']
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
-    do_it = False
+    do_it = True
 
     if do_it:
         #########################################################################
