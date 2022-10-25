@@ -40,12 +40,11 @@ class Patient:
         self.patient = get_current("Patient")
         self.db = get_current("PatientDB")
         self.external_name = None
-        self.genou = []
         self.abdomen = []
         self.jonction = []
-        self.pedia = False      # True si dossier pédia : trouvé par méthode self.pediatrique()
-        self.poi_genou = None   # nom du poi genou (si erreur dans la typo)
+        self.pedia = False  # True si dossier pédia : trouvé par méthode self.pediatrique()
         self.poi_abdo = None
+        self.poi_DSP = None
         self.lim_inf = None
         self.lim_sup = None
         self.upper_pallet = None
@@ -71,8 +70,8 @@ class Patient:
         if 'FFS' not in self.examinations:
             print("\n---------------\n Ce dossier ne contient pas de scanner 'Feet First' ... ")
             self.lim_inf, self.lim_sup = [lim.z for lim in
-                                self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries[
-                                    self.external_name].GetBoundingBox()]
+                                          self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries[
+                                              self.external_name].GetBoundingBox()]
             if abs(self.lim_sup - self.lim_inf) <= limite_de_taille:
                 self.pedia = ynbox("L'algo détecte que le patient mesure moins de 130 cm. Est-ce bien le cas ?")
                 print("-------> Il s'agit d'un dossier pédiatrique")
@@ -93,12 +92,6 @@ class Patient:
         self.jonction = self.get_point_coords('jonction')
         if not self.jonction:
             print('pas de point jonction!!!!!!!!!')
-
-        self.poi_genou = "genou"
-        self.genou = self.get_point_coords(self.poi_genou)
-        if not self.genou:
-            self.poi_genou = "genoux"
-            self.genou = self.get_point_coords(self.poi_genou)
 
         self.poi_abdo = 'abdomen'
         self.abdomen = self.get_point_coords(self.poi_abdo)
@@ -127,10 +120,10 @@ class Patient:
         # à 21 cm de ce point
         pallet = 'Upper pallet'
 
-        if check_roi(self.case,pallet):
-            if has_contour(self.case,self.exam_name,pallet):
+        if check_roi(self.case, pallet):
+            if has_contour(self.case, self.exam_name, pallet):
                 self.upper_pallet = self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries[
-                                          pallet].GetBoundingBox()[0].y
+                    pallet].GetBoundingBox()[0].y
             else:
                 raise NameError('La structure de table est vide!')
         else:
@@ -151,8 +144,23 @@ class Patient:
             retval_0.CreateExternalGeometry(Examination=self.examination, ThresholdLevel=-250)
             self.external_name = external_name
 
-        self.lim_inf, self.lim_sup = [lim.z for lim in self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries[self.external_name].GetBoundingBox()]
+        # si le contour existe, mais qu'il est vide, il faut le créer
+        if not has_contour(self.case, self.exam_name, self.external_name):
+            self.case.PatientModel.RegionsOfInterest[self.external_name].CreateExternalGeometry(
+                Examination=self.examination, ThresholdLevel=-250)
+
+        self.lim_inf, self.lim_sup = [lim.z for lim in
+                                      self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries[
+                                          self.external_name].GetBoundingBox()]
         print(f"External name : {self.external_name}")
+
+        # --------------------------------------------------------------------------------------
+        # Création du point DSP
+
+        if self.examinations['FFS'] == self.exam_name:
+            self.poi_DSP = [self.jonction[0], self.jonction[1] + 3, self.jonction[2]]
+            self.create_poi('dsp', self.poi_DSP, color='Black')
+
 
     def get_zero_scan(self, scan_direction):
         """Méthode permettant de récupérer le zéro du scanner. À noter que sur le scanner siemens somatom, le zéro n'est
@@ -412,7 +420,7 @@ if __name__ == '__main__':
                                                                                       'ConvergenceTolerance': 1E-05})
 
             # mapping des POI d'un scanner vers l'autre
-            pois = ["jonction", obj_patient.poi_genou, obj_patient.poi_abdo]
+            pois = ["jonction", obj_patient.poi_abdo]
 
             obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
                                                         CreateNewPois=False,
@@ -421,30 +429,12 @@ if __name__ == '__main__':
                                                         TargetExaminationNames=[obj_patient.examinations['FFS']],
                                                         ReverseMapping=False, AbortWhenBadDisplacementField=False)
 
-            # Travail sur les volumes
-
-            # copie des structures de table du scanner HFS vers le FFS. Cette partie est pour le moment mise en pause
-            # car il semblerait que l'on ne puisse pas recaler la table facilement.
-            if False:
-                # todo: résoudre le problème qui fait que les structures de table sont coupées lors de la copy du HFS
-                #  vers le FFS
-                obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
-                                                                TargetExaminationNames=[
-                                                                    obj_patient.examinations["FFS"]],
-                                                                RoiNames=["Mousse", "Renfort interne POM 1.4",
-                                                                          "Nylon 1.15",
-                                                                          "Carbon Fiber",
-                                                                          "Renfort 1.2", "Upper pallet",
-                                                                          "Lower pallet Radixact"],
-                                                                ImageRegistrationNames=[],
-                                                                TargetExaminationNamesToSkipAddedReg=[
-                                                                    obj_patient.examinations["FFS"]])
-
+        # Travail sur les volumes
         # Création des ROI
         if not pediatrique:
-            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTVpoumons']
+            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins']
         else:
-            ROI_LIST = ['PTV HFS', 'PTVpoumons', 'PTV robustesse']
+            ROI_LIST = ['PTV HFS', 'PTV poumons', 'PTV robustesse', 'PTV reins']
 
         # Vérification de l'existance des differentes roi dans le case
         resultat = [check_roi(obj_patient.case, roi) for roi in ROI_LIST]
@@ -538,8 +528,7 @@ if __name__ == '__main__':
             elif pediatrique:
                 obj_patient.algebra(out_roi="PTV HFS", in_roiA=[obj_patient.external_name], margeA=-0.3, derive=True)
 
-                # On réalise aussi un PTV jambe pour la robustesse. Le PTV va de 10cm au dessus de la bille genoux,
-                # jusqu'au bout des pieds
+                # On réalise aussi un PTV jambe pour la robustesse. Le PTV va du bout des pieds jusqu'à 15cm au dessus
                 obj_patient.create_cylinder_ptv('PTV robustesse', obj_patient.lim_inf + 15, obj_patient.lim_inf)
 
             # todo: voir si supprimer ces lignes commentées (doublon avec la boucle if suivante)
@@ -557,14 +546,21 @@ if __name__ == '__main__':
                 ResolveOverlappingContours=True)
 
             if direction == 'HFS':
-                # Création PTVpoumons = poumons - 1cm # seulement pour le scanner HFS!
-                obj_patient.algebra(out_roi='PTVpoumons', in_roiA=["Poumons"], margeA=-1, Type="Ptv", color="Yellow")
-                # PTV HFS - PTVPoumons -  = PTV HFS
-                obj_patient.algebra(out_roi='PTV HFS', in_roiA=["PTV HFS"], in_roiB=["PTVpoumons"],
+                # Création PTV poumons = poumons - 1cm # seulement pour le scanner HFS!
+                obj_patient.algebra(out_roi='PTV poumons', in_roiA=["Poumons"], margeA=-1, Type="Ptv", color="Yellow")
+
+                # Création PTV reins = reins - 1cm # seulement pour le scanner HFS!
+                obj_patient.algebra(out_roi='PTV reins', in_roiA=["Reins"], margeA=-1, Type="Ptv", color="Yellow")
+
+                # PTV HFS - PTV Poumons - PTV reins -  = PTV HFS
+                obj_patient.algebra(out_roi='PTV HFS', in_roiA=["PTV HFS"], in_roiB=["PTV poumons", 'PTV reins'],
                                     ResultOperation="Subtraction", derive=False)
             else:
                 # Supprimer la dérivation
-                obj_patient.case.PatientModel.RegionsOfInterest['PTVpoumons'].DeleteExpression()
+                obj_patient.case.PatientModel.RegionsOfInterest['PTV poumons'].DeleteExpression()
+                obj_patient.case.PatientModel.RegionsOfInterest['PTV reins'].DeleteExpression()
+                obj_patient.case.PatientModel.RegionsOfInterest['Reins'].DeleteExpression()
+                obj_patient.case.PatientModel.RegionsOfInterest['Poumons'].DeleteExpression()
 
     #########################################################################
     #########################################################################
@@ -574,7 +570,7 @@ if __name__ == '__main__':
 
     # Création des deux plans
     date = datetime.today().strftime('%Y%m%d')
-    date = date[2:]         # Pour enlever les deux premiers chiffres de l'année (2022 -> 22)
+    date = date[2:]  # Pour enlever les deux premiers chiffres de l'année (2022 -> 22)
     PLAN_NAMES = [f"{date}_HFS", f"{date}_FFS"]
     BS_NAMES = ["r1", "r1"]
     PATIENT_POSITIONS = ["HeadFirstSupine", "FeetFirstSupine"]
@@ -694,12 +690,8 @@ if __name__ == '__main__':
         obj_patient.case.TreatmentPlans[plan_name].SetCurrent()
         plan = get_current('Plan')
 
-        # # Sauvegarde du plan (obligatoire)
-        # print('~~~~ Saving case ~~~~')
-        # obj_patient.patient.Save()
         # Le bs créé est mis en primary pour simplifier
         plan.BeamSets[bs_name].SetCurrent()
-
         beam_set = get_current("BeamSet")
 
         # Optimization settings
@@ -724,7 +716,6 @@ if __name__ == '__main__':
                                                      DoseValue=total_dose, RelativePrescriptionLevel=1)
 
         beam_set.SetAutoScaleToPrimaryPrescription(AutoScale=False)
-        print('')
 
         ########################################################
         # définition des points de ref
@@ -740,8 +731,9 @@ if __name__ == '__main__':
 
         laser_rouge_HFS = "laser rouge"
 
-        # On positionne les lasers rouges et vert sur le point abdomen mais le rouge est décalé sur la bille genoux en GD
-        coords_laser_rouges_HFS = (obj_patient.genou[0], obj_patient.zero_scan, obj_patient.abdomen[2])
+        # On positionne les lasers rouges et vert sur le point abdomen mais le rouge est décalé sur la bille
+        # jonction en GD
+        coords_laser_rouges_HFS = (obj_patient.jonction[0], obj_patient.zero_scan, obj_patient.abdomen[2])
 
         if direction == 'HFS':  # Plan HFS
             coords_laser_vert = (0, obj_patient.zero_scan, obj_patient.abdomen[2])
@@ -753,7 +745,7 @@ if __name__ == '__main__':
             AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.examinations['FFS']].RoiGeometries[
                 'PTV FFS'].GetCenterOfRoi().y
 
-            if abs(AP_iso_FFS) > abs(obj_patient.upper_pallet)+21:
+            if abs(AP_iso_FFS) > abs(obj_patient.upper_pallet) + 21:
                 AP_iso_FFS = obj_patient.upper_pallet - 21
 
             coords_laser_vert = (0, AP_iso_FFS, obj_patient.abdomen[2])
@@ -808,7 +800,6 @@ if __name__ == '__main__':
                 print("No changes to save.")
 
         elif direction == 'FFS':
-
             try:
                 beam_names = ['Ant', 'Post']
                 angles = [0, 180]
@@ -824,13 +815,15 @@ if __name__ == '__main__':
                                                                         'Color': "98, 184, 234"}, Name=beam_name,
                                                          Description="", GantryAngle=angle, CouchRotationAngle=0,
                                                          CouchPitchAngle=0, CouchRollAngle=0, CollimatorAngle=0)
-                    # lignes semble-t-il obligatoires
+                    # lignes obligatoires
                     retval_0.SetBolus(BolusName="")
                     beam_set.Beams[beam_name].BeamMU = 0
 
                 # Attribution du champ 5 et du pitch de 0.5
                 pitch = 0.5
-                for num in range(4):
+                max_delivery_factor = 1.2
+
+                for num in range(len(beam_names)):
                     plan.PlanOptimizations[0].OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
                         num].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
                                                                                          PitchTomoHelical=None,
@@ -839,18 +832,27 @@ if __name__ == '__main__':
                                                                                          FrontJawPosition=-2.1,
                                                                                          MaxDeliveryTime=None,
                                                                                          MaxGantryPeriod=None,
-                                                                                         MaxDeliveryTimeFactor=1.15)
+                                                                                         MaxDeliveryTimeFactor=max_delivery_factor)
+
+                # modification du point de specification de dose pour le plan FFS (sinon export impossible)
+                xd, yd , zd= obj_patient.poi_DSP
+                retval_0 = beam_set.CreateDoseSpecificationPoint(Name="DSP", Coordinates={'x': xd,
+                                                                                          'y': yd,
+                                                                                          'z': zd},
+                                                                 VisualizationDiameter=1)
+                for beam in beam_set.Beams:
+                    beam.SetDoseSpecificationPoint(Name="DSP")
 
             except:
                 print("No changes to save.")
 
         beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.5, 'y': 0.5, 'z': 0.5})
 
-        ################################################################################################################
-        ################################################################################################################
-        ############################################   OPTIMISATION     ################################################
-        ################################################################################################################
-        ################################################################################################################
+        ###############################################################################################################
+        ###############################################################################################################
+        ############################################   OPTIMISATION     ###############################################
+        ###############################################################################################################
+        ###############################################################################################################
 
         # ////////////////////////////////////////////////////////////////////////////////////////////////////////////
         # Plan HFS
@@ -863,24 +865,37 @@ if __name__ == '__main__':
             else:
                 dose_poumons = total_dose
 
+            # Définition de la contrainte aux reins. Si la dose prescrite est supérieure à 10Gy, on applique 9.5 Gy en
+            # contrainte aux reins
+            if total_dose > 1000:
+                dose_reins = 950
+            # Sinon on garde la même dose aux poumons qu'au reste.
+            else:
+                dose_reins = total_dose
+
             # Définition des objectifs aux PTVs
             if not pediatrique:
-                # Ici on associe à chaque PTV un certain niveau par rapport à la dose de prescription. Travail avec numpy
-                # pour pouvoir utiliser la méthode np.where, associant la dose à la roi
-                ptv_list = np.array(['PTV HFS', 'PTV_1', 'PTV_2', 'PTV_3', 'PTV_4', 'PTVpoumons'])
+                # Ici on associe à chaque PTV un certain niveau par rapport à la dose de prescription.
+                # Travail avec numpy pour pouvoir utiliser la méthode np.where, associant la dose à la roi
+                ptv_list = np.array(['PTV HFS', 'PTV_1', 'PTV_2', 'PTV_3', 'PTV_4', 'PTV poumons', 'PTV reins'])
                 objectives_list = [total_dose, 0.9 * total_dose, 0.63 * total_dose, 0.37 * total_dose,
-                                   0.16 * total_dose, dose_poumons]
-                weight_list = [10, 1, 1, 1, 1, 1]
+                                   0.16 * total_dose, dose_poumons, dose_reins]
+                weight_list = [10, 1, 1, 1, 1, 1, 1]
+                robustesse = [False, False, False, False, False, False, False]
+                uniform = [True, False, False, False, False, True, True]
+
             elif pediatrique:
-                ptv_list = np.array(['PTV HFS', 'PTVpoumons', 'PTV robustesse'])
-                objectives_list = [total_dose, dose_poumons, total_dose]
-                weight_list = [10, 1, 1]
+                ptv_list = np.array(['PTV HFS', 'PTV poumons', 'PTV robustesse', 'PTV reins'])
+                objectives_list = [total_dose, dose_poumons, total_dose, dose_reins]
+                weight_list = [10, 1, 1, 1]
+                robustesse = [False, False, True, False]
+                uniform = [True, True, True, True]
 
             # ajout d'un max EUD au poumon avec fort poids
             contrainte_poumon = 800
             weight_poumon = 100
 
-            # ajout d'un max EUD au reins avec fort poids
+            # ajout d'un max EUD aux reins avec fort poids
             contrainte_reins = 1000
             weight_reins = 100
 
@@ -888,75 +903,61 @@ if __name__ == '__main__':
             obj_DFO = 0.16 * total_dose
             weight_DFO = 50
 
-            robustesse = False
-            if pediatrique:
-                robustesse = True
+            # robustesse = False
+            # if pediatrique:
+            #     robustesse = True
 
         # ////////////////////////////////////////////////////////////////////////////////////////////////////////////
         # Plan FFS
-        elif ind == 1:  # Plan FFS
+        elif direction == 'FFS':  # Plan FFS
             ptv_list = np.array(['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1'])
 
             objectives_list = [total_dose, 0.9 * total_dose, 0.63 * total_dose, 0.37 * total_dose,
                                0.16 * total_dose]
 
             weight_list = [1, 1, 1, 1, 1]
-            robustesse = True
+            robustesse = [True, False, False, False, False]
+            uniform = [True, False, False, False, False]
 
         # Ici, on crée des fonctions d'optimisation pour chacun des PTVS. Initialement, ces fonctions sont vides,
         # elles sont remplies ensuite
-        for roi in ptv_list:
+        for indice, roi in enumerate(ptv_list):
 
-            liste = ["PTV HFS", "PTVpoumons", "PTV FFS"]
-
-            if any(roi in s for s in liste):  # On ne met l'uniform dose que sur ces volumes là
+            # 1 - Uniform dose
+            if uniform[indice]:  # On ne met l'uniform dose que sur les volumes concernés
                 plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="UniformDose", RoiName=str(roi),
                                                                   IsConstraint=False,
                                                                   RestrictAllBeamsIndividually=False,
-                                                                  RestrictToBeam=None, IsRobust=False,
+                                                                  RestrictToBeam=None, IsRobust=robustesse[indice],
                                                                   RestrictToBeamSet=None, UseRbeDose=False)
 
-            # Pour les pédiatriques, on ne met la robustesse que sur le PTV robustesse
-            if pediatrique:
-                if roi == 'PTV robustesse':
-                    plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MinDose", RoiName=str(roi),
-                                                                      IsConstraint=False,
-                                                                      RestrictAllBeamsIndividually=False,
-                                                                      RestrictToBeam=None, IsRobust=robustesse,
-                                                                      RestrictToBeamSet=None, UseRbeDose=False)
-                else:
-                    plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MinDose", RoiName=str(roi),
-                                                                      IsConstraint=False,
-                                                                      RestrictAllBeamsIndividually=False,
-                                                                      RestrictToBeam=None, IsRobust=False,
-                                                                      RestrictToBeamSet=None, UseRbeDose=False)
-
-            elif not pediatrique:
-                plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MinDose", RoiName=str(roi),
-                                                                  IsConstraint=False,
-                                                                  RestrictAllBeamsIndividually=False,
-                                                                  RestrictToBeam=None, IsRobust=robustesse,
-                                                                  RestrictToBeamSet=None, UseRbeDose=False)
-            plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MaxDose", RoiName=str(roi),
-                                                              IsConstraint=False, RestrictAllBeamsIndividually=False,
-                                                              RestrictToBeam=None, IsRobust=False,
+            # 2 - Min dose
+            plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MinDose", RoiName=str(roi),
+                                                              IsConstraint=False,
+                                                              RestrictAllBeamsIndividually=False,
+                                                              RestrictToBeam=None, IsRobust=robustesse[indice],
                                                               RestrictToBeamSet=None, UseRbeDose=False)
 
-            # On attribue la dose totale à tous les objectifs
-            for dose in plan.PlanOptimizations[0].Objective.ConstituentFunctions:
-                # On regarde dans le xième objectif à quelle roi il est associé
-                associated_roi = dose.OfDoseGridRoi.OfRoiGeometry.OfRoi.Name
-                print(associated_roi)
-                # On recherche dans les np.array créée ci -dessus à quel objectif cela correspond
-                indice = np.where(ptv_list == associated_roi)[0][0]
-                print(indice)
-                # On attribue la dose correspondante
-                dose.DoseFunctionParameters.DoseLevel = objectives_list[indice]
-                dose.DoseFunctionParameters.Weight = weight_list[indice]
+            # 3 - Max dose
+            plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MaxDose", RoiName=str(roi),
+                                                              IsConstraint=False, RestrictAllBeamsIndividually=False,
+                                                              RestrictToBeam=None, IsRobust=robustesse[indice],
+                                                              RestrictToBeamSet=None, UseRbeDose=False)
+
+        # On attribue la dose totale à tous les objectifs
+        for dose in plan.PlanOptimizations[0].Objective.ConstituentFunctions:
+            # On regarde dans le xième objectif à quelle roi il est associé
+            associated_roi = dose.OfDoseGridRoi.OfRoiGeometry.OfRoi.Name
+            print(associated_roi)
+            # On recherche dans les np.array créée ci -dessus à quel objectif cela correspond
+            indice = np.where(ptv_list == associated_roi)[0][0]
+            print(indice)
+            # On attribue la dose correspondante
+            dose.DoseFunctionParameters.DoseLevel = objectives_list[indice]
+            dose.DoseFunctionParameters.Weight = weight_list[indice]
 
         # print('~~~~ Saving case ~~~~')
         # obj_patient.patient.Save()
-
 
         # Ajout du dose fall-of sur le volume opt_jonction (OAR_name)
         if not pediatrique:
@@ -1014,3 +1015,5 @@ if __name__ == '__main__':
                                                                                   PatientGeometryUncertaintyType="PerTreatmentCourse",
                                                                                   PositionUncertaintyType="PerTreatmentCourse",
                                                                                   TreatmentCourseScenariosFactor=1000)
+
+
