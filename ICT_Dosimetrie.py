@@ -161,7 +161,6 @@ class Patient:
             self.poi_DSP = [self.jonction[0], self.jonction[1] + 3, self.jonction[2]]
             self.create_poi('dsp', self.poi_DSP, color='Black')
 
-
     def get_zero_scan(self, scan_direction):
         """Méthode permettant de récupérer le zéro du scanner. À noter que sur le scanner siemens somatom, le zéro n'est
         pas à zéro en antépost, il est situé à (0,0,hauteur table)
@@ -305,9 +304,13 @@ class Patient:
         self.examinations = examinations
         return self.examinations
 
-    def create_ROI(self, roi_name, roi_type='Ptv'):
-        """Méthode utilisée pour créer des volumes de type PTV"""
-        color = ["#" + ''.join([random.choice('ABCDEF0123456789') for i in range(6)])][0]
+    def create_ROI(self, roi_name, color=None, roi_type='Ptv'):
+        """Méthode utilisée pour créer des volumes de type PTV
+        Si on ne donne pas de couleur, celle-ci est prise aléatoirement"""
+
+        if color is None:
+            color = ["#" + ''.join([random.choice('ABCDEF0123456789') for i in range(6)])][0]
+
         self.case.PatientModel.CreateRoi(Name=roi_name, Color=color, Type=roi_type)
 
     def create_poi(self, poi_name, coords, color="128, 128, 255"):
@@ -433,13 +436,16 @@ if __name__ == '__main__':
         # Création des ROI
         if not pediatrique:
             ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins']
+            colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633"]
         else:
             ROI_LIST = ['PTV HFS', 'PTV poumons', 'PTV robustesse', 'PTV reins']
+            colors = ["#0080C0", "#66FFFF", None, "#666633"]
 
         # Vérification de l'existance des differentes roi dans le case
         resultat = [check_roi(obj_patient.case, roi) for roi in ROI_LIST]
         # Création des ROI dans le roi set si ROI non existantes
-        [obj_patient.create_ROI(ROI_LIST[index]) for index, roi in enumerate(resultat) if roi == False]
+        [obj_patient.create_ROI(ROI_LIST[index], color=colors[index]) for index, roi in enumerate(resultat) if not
+        roi]
 
         # ------------------------------------------------------------------------------------
         # On commence d'abord sur le scanner Head First puis on travaille sur le Feet First. SI pédiatrique, on ne
@@ -835,7 +841,7 @@ if __name__ == '__main__':
                                                                                          MaxDeliveryTimeFactor=max_delivery_factor)
 
                 # modification du point de specification de dose pour le plan FFS (sinon export impossible)
-                xd, yd , zd= obj_patient.poi_DSP
+                xd, yd, zd = obj_patient.poi_DSP
                 retval_0 = beam_set.CreateDoseSpecificationPoint(Name="DSP", Coordinates={'x': xd,
                                                                                           'y': yd,
                                                                                           'z': zd},
@@ -1015,5 +1021,3 @@ if __name__ == '__main__':
                                                                                   PatientGeometryUncertaintyType="PerTreatmentCourse",
                                                                                   PositionUncertaintyType="PerTreatmentCourse",
                                                                                   TreatmentCourseScenariosFactor=1000)
-
-
