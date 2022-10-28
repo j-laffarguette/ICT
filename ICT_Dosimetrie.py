@@ -350,7 +350,7 @@ if __name__ == '__main__':
         to_do = ['HFS', 'FFS']
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
-    do_it = True
+    do_it = False
 
     if do_it:
         #########################################################################
@@ -742,7 +742,11 @@ if __name__ == '__main__':
         coords_laser_rouges_HFS = (obj_patient.jonction[0], obj_patient.zero_scan, obj_patient.abdomen[2])
 
         if direction == 'HFS':  # Plan HFS
-            coords_laser_vert = (0, obj_patient.zero_scan, obj_patient.abdomen[2])
+            # Le laser vert est mis en antépost au centre vertical du volume "Poumons"
+            AP_iso_HFS = obj_patient.case.PatientModel.StructureSets[obj_patient.examinations['HFS']].RoiGeometries[
+                'Poumons'].GetCenterOfRoi().y
+            coords_laser_vert = (0, AP_iso_HFS, obj_patient.abdomen[2])
+
         elif direction == 'FFS':  # Plan FFS
             # Pour le plan FFS, le laser vert est positionné en AP au centre du volume PTV ffs afin que le patient
             # soit bien centré en hauteur et n'ait pas les genoux qui dépassent du cadre. Mais attention, ne doit pas
@@ -1021,3 +1025,6 @@ if __name__ == '__main__':
                                                                                   PatientGeometryUncertaintyType="PerTreatmentCourse",
                                                                                   PositionUncertaintyType="PerTreatmentCourse",
                                                                                   TreatmentCourseScenariosFactor=1000)
+
+    print('~~~~ Saving case ~~~~')
+    obj_patient.patient.Save()
