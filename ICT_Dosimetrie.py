@@ -1,5 +1,9 @@
 import os, sys
 import random
+import warnings
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
+import pandas as pd
 
 try:
     pid_file_path = os.path.join(os.environ.get('userprofile'), 'AppData', 'Local', 'Temp', 'raystation.pid')
@@ -29,6 +33,37 @@ def check_roi(case, roi_to_check):
 def has_contour(case, examination, roi_to_check):
     """ Check if a structure is empty or not"""
     return case.PatientModel.StructureSets[examination].RoiGeometries[roi_to_check].HasContours()
+
+
+def set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, HighDoseLevel):
+    # Création de la fonction
+    plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
+                                                      IsConstraint=False,
+                                                      RestrictAllBeamsIndividually=False,
+                                                      RestrictToBeam=None, IsRobust=IsRobust,
+                                                      RestrictToBeamSet=None, UseRbeDose=False)
+
+    # Remplissage des valeurs
+    # On regarde le nombre de fonctions déjà présentes. En considérant que la fonction
+    # venant juste d'être rentrée est la dernière
+
+    n_functions = len(plan.PlanOptimizations[0].Objective.ConstituentFunctions)
+    dose = plan.PlanOptimizations[0].Objective.ConstituentFunctions[n_functions - 1]
+
+    if RoiName == dose.OfDoseGridRoi.OfRoiGeometry.OfRoi.Name:  # Vérification que tout va bien
+        print(RoiName)
+
+        if FunctionType == 'DoseFallOff':
+            dose.DoseFunctionParameters.HighDoseLevel = HighDoseLevel
+            dose.DoseFunctionParameters.LowDoseDistance = 0.5
+            dose.DoseFunctionParameters.Weight = Weight
+            dose.DoseFunctionParameters.AdaptToTargetDoseLevels = True
+
+        else:
+            # On attribue la dose correspondante
+            dose.DoseFunctionParameters.DoseLevel = DoseLevel
+            dose.DoseFunctionParameters.Weight = Weight
+    print('-> Objectif créé !')
 
 
 class Patient:
@@ -350,7 +385,7 @@ if __name__ == '__main__':
         to_do = ['HFS', 'FFS']
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
-    do_it = False
+    do_it = True
 
     if do_it:
         #########################################################################
@@ -360,86 +395,89 @@ if __name__ == '__main__':
         #########################################################################
 
         if not pediatrique:
-            # Première partie, réalisation du recalage rigide
-            # Suppression pure et simple de tous les FOR registration déjà existants
-            for reg in obj_patient.case.Registrations:
-                FFOR = reg.FromFrameOfReference
-                RFOR = reg.ToFrameOfReference
-                obj_patient.case.RemoveFrameOfReferenceRegistration(
-                    FloatingFrameOfReference=FFOR,
-                    ReferenceFrameOfReference=RFOR)
+                # Première partie, réalisation du recalage rigide
+                # Suppression pure et simple de tous les FOR registration déjà existants
 
-            # Création du recalage entre le scanner FFS et le scanner HFS
-            # 1. création du for reg
-            obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
-                FromExaminationName=obj_patient.examinations['HFS'], ToExaminationName=obj_patient.examinations['FFS'],
-                RegistrationName="HFS to FFS", Description=None)
+                for reg in obj_patient.case.Registrations:
+                    FFOR = reg.FromFrameOfReference
+                    RFOR = reg.ToFrameOfReference
+                    obj_patient.case.RemoveFrameOfReferenceRegistration(
+                        FloatingFrameOfReference=FFOR,
+                        ReferenceFrameOfReference=RFOR)
 
-            # recalage automatique
-            obj_patient.case.ComputeGrayLevelBasedRigidRegistration(
-                FloatingExaminationName=obj_patient.examinations['HFS'],
-                ReferenceExaminationName=obj_patient.examinations[
-                    'FFS'],
-                UseOnlyTranslations=True, HighWeightOnBones=True,
-                InitializeImages=True, FocusRoisNames=[],
-                RegistrationName=None)
+                # Création du recalage entre le scanner FFS et le scanner HFS
+                # 1. création du for reg
+                obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
+                    FromExaminationName=obj_patient.examinations['HFS'], ToExaminationName=obj_patient.examinations['FFS'],
+                    RegistrationName="HFS to FFS", Description=None)
 
-            # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity avec la
-            # vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
+                # recalage automatique
+                obj_patient.case.ComputeGrayLevelBasedRigidRegistration(
+                    FloatingExaminationName=obj_patient.examinations['HFS'],
+                    ReferenceExaminationName=obj_patient.examinations[
+                        'FFS'],
+                    UseOnlyTranslations=True, HighWeightOnBones=True,
+                    InitializeImages=True, FocusRoisNames=[],
+                    RegistrationName=None)
 
-            obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
+                # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity avec la
+                # vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
+
+                obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
+                                                                TargetExaminationNames=[obj_patient.examinations['FFS']],
+                                                                RoiNames=["Vessie"], ImageRegistrationNames=[],
+                                                                TargetExaminationNamesToSkipAddedReg=[
+                                                                    obj_patient.examinations['FFS']])
+
+                # Création du recalage élastique rigide
+                reg_name = "elastique rigide"
+                obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
+                                                                                      ReferenceExaminationName=
+                                                                                      obj_patient.examinations['HFS'],
+                                                                                      TargetExaminationNames=[
+                                                                                          obj_patient.examinations["FFS"]],
+                                                                                      ControllingRoiNames=["Vessie"],
+                                                                                      ControllingPoiNames=[],
+                                                                                      FocusRoiNames=[],
+                                                                                      AlgorithmSettings={
+                                                                                          'NumberOfResolutionLevels': 1,
+                                                                                          'InitialResolution': {'x': 0.5,
+                                                                                                                'y': 0.5,
+                                                                                                                'z': 0.5},
+                                                                                          'FinalResolution': {'x': 0.25,
+                                                                                                              'y': 0.25,
+                                                                                                              'z': 0.5},
+                                                                                          'InitialGaussianSmoothingSigma': 2,
+                                                                                          'FinalGaussianSmoothingSigma': 0.333333333333333,
+                                                                                          'InitialGridRegularizationWeight': 400,
+                                                                                          'FinalGridRegularizationWeight': 400,
+                                                                                          'ControllingRoiWeight': 0.5,
+                                                                                          'ControllingPoiWeight': 0.1,
+                                                                                          'MaxNumberOfIterationsPerResolutionLevel': 1000,
+                                                                                          'ImageSimilarityMeasure': "None",
+                                                                                          'DeformationStrategy': "Default",
+                                                                                          'ConvergenceTolerance': 1E-05})
+
+                # mapping des POI d'un scanner vers l'autre
+                pois = ["jonction", obj_patient.poi_abdo]
+
+                obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
+                                                            CreateNewPois=False,
+                                                            StructureRegistrationGroupNames=[reg_name],
+                                                            ReferenceExaminationNames=[obj_patient.examinations['HFS']],
                                                             TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                            RoiNames=["Vessie"], ImageRegistrationNames=[],
-                                                            TargetExaminationNamesToSkipAddedReg=[
-                                                                obj_patient.examinations['FFS']])
-
-            # Création du recalage élastique rigide
-            reg_name = "elastique rigide"
-            obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
-                                                                                  ReferenceExaminationName=
-                                                                                  obj_patient.examinations['HFS'],
-                                                                                  TargetExaminationNames=[
-                                                                                      obj_patient.examinations["FFS"]],
-                                                                                  ControllingRoiNames=["Vessie"],
-                                                                                  ControllingPoiNames=[],
-                                                                                  FocusRoiNames=[],
-                                                                                  AlgorithmSettings={
-                                                                                      'NumberOfResolutionLevels': 1,
-                                                                                      'InitialResolution': {'x': 0.5,
-                                                                                                            'y': 0.5,
-                                                                                                            'z': 0.5},
-                                                                                      'FinalResolution': {'x': 0.25,
-                                                                                                          'y': 0.25,
-                                                                                                          'z': 0.5},
-                                                                                      'InitialGaussianSmoothingSigma': 2,
-                                                                                      'FinalGaussianSmoothingSigma': 0.333333333333333,
-                                                                                      'InitialGridRegularizationWeight': 400,
-                                                                                      'FinalGridRegularizationWeight': 400,
-                                                                                      'ControllingRoiWeight': 0.5,
-                                                                                      'ControllingPoiWeight': 0.1,
-                                                                                      'MaxNumberOfIterationsPerResolutionLevel': 1000,
-                                                                                      'ImageSimilarityMeasure': "None",
-                                                                                      'DeformationStrategy': "Default",
-                                                                                      'ConvergenceTolerance': 1E-05})
-
-            # mapping des POI d'un scanner vers l'autre
-            pois = ["jonction", obj_patient.poi_abdo]
-
-            obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
-                                                        CreateNewPois=False,
-                                                        StructureRegistrationGroupNames=[reg_name],
-                                                        ReferenceExaminationNames=[obj_patient.examinations['HFS']],
-                                                        TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                        ReverseMapping=False, AbortWhenBadDisplacementField=False)
+                                                            ReverseMapping=False, AbortWhenBadDisplacementField=False)
 
         # Travail sur les volumes
         # Création des ROI
         if not pediatrique:
-            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins']
-            colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633"]
+            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins',
+                        'opt PTV HFS', 'PTV Paroi thoracique']
+            colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633", '#696100',
+                      None]
         else:
-            ROI_LIST = ['PTV HFS', 'PTV poumons', 'PTV robustesse', 'PTV reins']
-            colors = ["#0080C0", "#66FFFF", None, "#666633"]
+            ROI_LIST = ['PTV HFS', 'PTV poumons', 'PTV robustesse', 'PTV reins', 'opt PTV HFS']
+            colors = ["#0080C0", "#66FFFF", None, "#666633", '#696100']
 
         # Vérification de l'existance des differentes roi dans le case
         resultat = [check_roi(obj_patient.case, roi) for roi in ROI_LIST]
@@ -537,11 +575,6 @@ if __name__ == '__main__':
                 # On réalise aussi un PTV jambe pour la robustesse. Le PTV va du bout des pieds jusqu'à 15cm au dessus
                 obj_patient.create_cylinder_ptv('PTV robustesse', obj_patient.lim_inf + 15, obj_patient.lim_inf)
 
-            # todo: voir si supprimer ces lignes commentées (doublon avec la boucle if suivante)
-            # # PTV HFS - PTVPoumons  = PTV HFS
-            # obj_patient.algebra(out_roi='PTV HFS', in_roiA=["PTV HFS"], in_roiB=["PTVpoumons"],
-            #                     ResultOperation="Subtraction", derive=False)
-
             # simplification des volumes pour éviter overlaps
             roi_list = [roi.Name for roi in obj_patient.case.PatientModel.RegionsOfInterest if roi.Type == "Support"]
 
@@ -555,13 +588,23 @@ if __name__ == '__main__':
                 # Création PTV poumons = poumons - 1cm # seulement pour le scanner HFS!
                 obj_patient.algebra(out_roi='PTV poumons', in_roiA=["Poumons"], margeA=-1, Type="Ptv", color="Yellow")
 
+                # PTV paroi thoracique = paroi thoracique
+                obj_patient.algebra(out_roi='PTV Paroi thoracique', in_roiA=["Paroi thoracique"],derive=False)
+
                 # Création PTV reins = reins - 1cm # seulement pour le scanner HFS!
                 obj_patient.algebra(out_roi='PTV reins', in_roiA=["Reins"], margeA=-1, Type="Ptv", color="Yellow")
 
                 # PTV HFS - PTV Poumons - PTV reins -  = PTV HFS
                 obj_patient.algebra(out_roi='PTV HFS', in_roiA=["PTV HFS"], in_roiB=["PTV poumons", 'PTV reins'],
                                     ResultOperation="Subtraction", derive=False)
+
+                # opt PTV HFS = PTV HFS - Poumons - Reins
+                obj_patient.algebra(out_roi='opt PTV HFS', in_roiA=["PTV HFS"], in_roiB=["Poumons", 'Reins'],
+                                    ResultOperation="Subtraction", derive=False)
+
+
             else:
+
                 # Supprimer la dérivation
                 obj_patient.case.PatientModel.RegionsOfInterest['PTV poumons'].DeleteExpression()
                 obj_patient.case.PatientModel.RegionsOfInterest['PTV reins'].DeleteExpression()
@@ -864,150 +907,34 @@ if __name__ == '__main__':
         ###############################################################################################################
         ###############################################################################################################
 
-        # ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        # Plan HFS
-        if direction == 'HFS':  # Plan HFS
-            # Définition de la contrainte aux poumons. Si la dose prescrite est supérieure à 8Gy, on applique 7.5 Gy en
-            # contrainte aux poumons (vu avec SP, ça marche mieux que de mettre 8)
-            if total_dose > 800:
-                dose_poumons = 750
-            # Sinon on garde la même dose aux poumons qu'au reste.
-            else:
-                dose_poumons = total_dose
+        directory = r"G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT"
 
-            # Définition de la contrainte aux reins. Si la dose prescrite est supérieure à 10Gy, on applique 9.5 Gy en
-            # contrainte aux reins
-            if total_dose > 1000:
-                dose_reins = 950
-            # Sinon on garde la même dose aux poumons qu'au reste.
-            else:
-                dose_reins = total_dose
-
-            # Définition des objectifs aux PTVs
+        if direction == 'HFS':
             if not pediatrique:
-                # Ici on associe à chaque PTV un certain niveau par rapport à la dose de prescription.
-                # Travail avec numpy pour pouvoir utiliser la méthode np.where, associant la dose à la roi
-                ptv_list = np.array(['PTV HFS', 'PTV_1', 'PTV_2', 'PTV_3', 'PTV_4', 'PTV poumons', 'PTV reins'])
-                objectives_list = [total_dose, 0.9 * total_dose, 0.63 * total_dose, 0.37 * total_dose,
-                                   0.16 * total_dose, dose_poumons, dose_reins]
-                weight_list = [10, 1, 1, 1, 1, 1, 1]
-                robustesse = [False, False, False, False, False, False, False]
-                uniform = [True, False, False, False, False, True, True]
+                filename = "adultesHFS.csv"
+            else:
+                filename = "pediatrique.csv"
+        else :
+            filename = "adultesFFS.csv"
 
-            elif pediatrique:
-                ptv_list = np.array(['PTV HFS', 'PTV poumons', 'PTV robustesse', 'PTV reins'])
-                objectives_list = [total_dose, dose_poumons, total_dose, dose_reins]
-                weight_list = [10, 1, 1, 1]
-                robustesse = [False, False, True, False]
-                uniform = [True, True, True, True]
+        csv_path = os.path.join(directory, filename)
+        df = pd.read_csv(csv_path, sep=';')
 
-            # ajout d'un max EUD au poumon avec fort poids
-            contrainte_poumon = 800
-            weight_poumon = 100
+        for row in df.iloc:
+            FunctionType = row.FunctionType
+            RoiName = row.RoiName
+            DoseLevel = row.DoseLevel * total_dose
+            Weight = row.Weight
+            IsRobust = row.IsRobust
+            HighDoseLevel = row.HighDoseLevel * total_dose
+            set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, HighDoseLevel)
 
-            # ajout d'un max EUD aux reins avec fort poids
-            contrainte_reins = 1000
-            weight_reins = 100
+        ###############################################################################################################
+        ###############################################################################################################
+        ############################################   Robustess        ###############################################
+        ###############################################################################################################
+        ###############################################################################################################
 
-            # ajout d'un "dose fall-off" sur les derniers volumes d'opt pour les adultes seulement
-            obj_DFO = 0.16 * total_dose
-            weight_DFO = 50
-
-            # robustesse = False
-            # if pediatrique:
-            #     robustesse = True
-
-        # ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        # Plan FFS
-        elif direction == 'FFS':  # Plan FFS
-            ptv_list = np.array(['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1'])
-
-            objectives_list = [total_dose, 0.9 * total_dose, 0.63 * total_dose, 0.37 * total_dose,
-                               0.16 * total_dose]
-
-            weight_list = [1, 1, 1, 1, 1]
-            robustesse = [True, False, False, False, False]
-            uniform = [True, False, False, False, False]
-
-        # Ici, on crée des fonctions d'optimisation pour chacun des PTVS. Initialement, ces fonctions sont vides,
-        # elles sont remplies ensuite
-        for indice, roi in enumerate(ptv_list):
-
-            # 1 - Uniform dose
-            if uniform[indice]:  # On ne met l'uniform dose que sur les volumes concernés
-                plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="UniformDose", RoiName=str(roi),
-                                                                  IsConstraint=False,
-                                                                  RestrictAllBeamsIndividually=False,
-                                                                  RestrictToBeam=None, IsRobust=robustesse[indice],
-                                                                  RestrictToBeamSet=None, UseRbeDose=False)
-
-            # 2 - Min dose
-            plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MinDose", RoiName=str(roi),
-                                                              IsConstraint=False,
-                                                              RestrictAllBeamsIndividually=False,
-                                                              RestrictToBeam=None, IsRobust=robustesse[indice],
-                                                              RestrictToBeamSet=None, UseRbeDose=False)
-
-            # 3 - Max dose
-            plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MaxDose", RoiName=str(roi),
-                                                              IsConstraint=False, RestrictAllBeamsIndividually=False,
-                                                              RestrictToBeam=None, IsRobust=robustesse[indice],
-                                                              RestrictToBeamSet=None, UseRbeDose=False)
-
-        # On attribue la dose totale à tous les objectifs
-        for dose in plan.PlanOptimizations[0].Objective.ConstituentFunctions:
-            # On regarde dans le xième objectif à quelle roi il est associé
-            associated_roi = dose.OfDoseGridRoi.OfRoiGeometry.OfRoi.Name
-            print(associated_roi)
-            # On recherche dans les np.array créée ci -dessus à quel objectif cela correspond
-            indice = np.where(ptv_list == associated_roi)[0][0]
-            print(indice)
-            # On attribue la dose correspondante
-            dose.DoseFunctionParameters.DoseLevel = objectives_list[indice]
-            dose.DoseFunctionParameters.Weight = weight_list[indice]
-
-        # print('~~~~ Saving case ~~~~')
-        # obj_patient.patient.Save()
-
-        # Ajout du dose fall-of sur le volume opt_jonction (OAR_name)
-        if not pediatrique:
-            OAR_name = "opt_jonction"
-            dose = plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="DoseFallOff", RoiName=OAR_name,
-                                                                     IsConstraint=False,
-                                                                     RestrictAllBeamsIndividually=False,
-                                                                     RestrictToBeam=None, IsRobust=False,
-                                                                     RestrictToBeamSet=None, UseRbeDose=False)
-            dose.DoseFunctionParameters.HighDoseLevel = obj_DFO
-            dose.DoseFunctionParameters.LowDoseDistance = 0.5
-            dose.DoseFunctionParameters.Weight = weight_DFO
-            dose.DoseFunctionParameters.AdaptToTargetDoseLevels = True
-
-        # Finalement à la toute fin, on ajoute le max EUD sur le poumon pour le plan HFS ainsi que le EUD sur les reins
-        try:
-            if ind == 0:  # Plan HFS
-                if total_dose >= 800:
-                    dose = plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MaxEud", RoiName="Poumons",
-                                                                             IsConstraint=False,
-                                                                             RestrictAllBeamsIndividually=False,
-                                                                             RestrictToBeam=None, IsRobust=False,
-                                                                             RestrictToBeamSet=None, UseRbeDose=False)
-                    dose.DoseFunctionParameters.DoseLevel = contrainte_poumon
-                    dose.DoseFunctionParameters.Weight = weight_poumon
-
-                if total_dose >= 1000:
-                    for rein in ['Rein D', 'Rein G']:
-                        dose = plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType="MaxEud", RoiName=rein,
-                                                                                 IsConstraint=False,
-                                                                                 RestrictAllBeamsIndividually=False,
-                                                                                 RestrictToBeam=None, IsRobust=False,
-                                                                                 RestrictToBeamSet=None,
-                                                                                 UseRbeDose=False)
-                        dose.DoseFunctionParameters.DoseLevel = contrainte_reins
-                        dose.DoseFunctionParameters.Weight = weight_reins
-        except:
-            print("ça n'a pas marché le truc du poumon, là")
-
-        # Robustesse
         decalage = 1.5  # cm
         plan.PlanOptimizations[0].OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=0,
                                                                                   PositionUncertaintyPosterior=0,
