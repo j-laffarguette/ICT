@@ -1,0 +1,13 @@
+RoiName;FunctionType;DoseLevel;DoseLevel;IsRobust;Weight;HighDoseLevel;LowDoseDistance;AdaptToTargetDoseLevels
+PTV HFS;Uniformdose;1;;True;15;;;
+PTV HFS;MinDose;1;;True;15;;;
+PTV HFS;MaxDose;1;;True;50;;;
+PTV_4;MinDose;0.9;;False;1;;;
+PTV_4;MaxDose;0.9;;False;1;;;
+PTV_3;MinDose;0.63;;False;1;;;
+PTV_3;MaxDose;0.63;;False;1;;;
+PTV_2;MinDose;0.37;;False;1;;;
+PTV_2;MaxDose;0.37;;False;1;;;
+PTV_1;MinDose;0.16;;False;1;;;
+PTV_1;MaxDose;0.16;;False;1;;;
+opt_jonction;DoseFallOff;0.625;;False;50;0.16;0.2;True
