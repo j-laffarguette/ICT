@@ -35,20 +35,38 @@ def has_contour(case, examination, roi_to_check):
     return case.PatientModel.StructureSets[examination].RoiGeometries[roi_to_check].HasContours()
 
 
-def set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, HighDoseLevel):
+def set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel):
+    """
+    Cette fonction permet de créer un objectif de dose et de remplir tous les paramètres
+    :param plan: plan = get_current_plan()
+    :param FunctionType: "MaxEud" ou autres
+    :param RoiName: "nom de la roi"
+    :param DoseLevel: entre 0 et 1 -> sera multiplié par la dose totale en cGy
+    :param Weight: poids
+    :param IsRobust: True ou False
+    :param IsConstraint : True ou False
+    :param HighDoseLevel: Entre 0 et 1 -> Pour le dose fall off
+    :return:
+    """
+
     # Création de la fonction
     plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
-                                                      IsConstraint=False,
+                                                      IsConstraint=IsConstraint,
                                                       RestrictAllBeamsIndividually=False,
                                                       RestrictToBeam=None, IsRobust=IsRobust,
                                                       RestrictToBeamSet=None, UseRbeDose=False)
 
     # Remplissage des valeurs
     # On regarde le nombre de fonctions déjà présentes. En considérant que la fonction
-    # venant juste d'être rentrée est la dernière
+    # venant juste d'être rentrée est la dernière. Attention, on ne cherche pas au même endroit pour les objectifs
+    # et les contraintes
 
-    n_functions = len(plan.PlanOptimizations[0].Objective.ConstituentFunctions)
-    dose = plan.PlanOptimizations[0].Objective.ConstituentFunctions[n_functions - 1]
+    if IsConstraint:
+        n_functions = len(plan.PlanOptimizations[0].Constraints)
+        dose = plan.PlanOptimizations[0].Constraints[n_functions - 1]
+    else:
+        n_functions = len(plan.PlanOptimizations[0].Objective.ConstituentFunctions)
+        dose = plan.PlanOptimizations[0].Objective.ConstituentFunctions[n_functions - 1]
 
     if RoiName == dose.OfDoseGridRoi.OfRoiGeometry.OfRoi.Name:  # Vérification que tout va bien
         print(RoiName)
@@ -56,14 +74,21 @@ def set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, H
         if FunctionType == 'DoseFallOff':
             dose.DoseFunctionParameters.HighDoseLevel = HighDoseLevel
             dose.DoseFunctionParameters.LowDoseDistance = 0.5
-            dose.DoseFunctionParameters.Weight = Weight
             dose.DoseFunctionParameters.AdaptToTargetDoseLevels = True
 
         else:
             # On attribue la dose correspondante
             dose.DoseFunctionParameters.DoseLevel = DoseLevel
-            dose.DoseFunctionParameters.Weight = Weight
+        dose.DoseFunctionParameters.Weight = Weight  # On met un weight même aux contraintes
+
+    else:
+        raise NameError("Le nom de la function dans le CSV ne correspond pas à la fonction créée. C'est la tuile...")
     print('-> Objectif créé !')
+
+
+def round_to_nearest_half_int(num):
+    # ✅ Round number to nearest 0.5
+    return round(num * 2) / 2
 
 
 class Patient:
@@ -83,13 +108,7 @@ class Patient:
         self.lim_inf = None
         self.lim_sup = None
         self.upper_pallet = None
-
-        try:
-            # juste pour différencier les scanners de toulouse des nôtres (pour le zéro scan à zéro et non pas à
-            # hauteur table)
-            self.doctor = self.case.Physician.Name
-        except:
-            print('?')
+        self.direction = 'HFS'
 
         # Récupération des informations des CT (nom + scan position HFS ou FFS)
         self.examinations = self.get_ct_list()  # dictionnaire {"exam_name":"FFS/HFS", ...}
@@ -97,6 +116,47 @@ class Patient:
         # Par défaut, à la première création de l'objet patient, le scanner Head First est pris en primary
         self.set_primary(self.examinations['HFS'])
         self.pediatrique()
+
+        self.verifications()
+
+    def verifications(self):
+        # ----------------------------------------------------------
+        # VERIF de la table. On ne vérifie que Upper Pallet
+        # Verification de la présence de la roi upper pallet
+        if not check_roi(self.case, 'Upper pallet'):
+            raise NameError(f'Structures de table absentes. Veuillez les créer !')
+
+        # --------------------------------------------------------------------------------
+        # Verif du point "jonction" ou du point abdo sur les scanners non pédiatriques
+        if not self.pedia:
+            if not self.jonction:
+                raise NameError(f'Point "jonction" manquant ou mal nommé. Veuillez le créer ou le modifier !')
+
+            if not self.abdomen:
+                raise NameError(f'Point "abdomen" manquant ou mal nommé. Veuillez le créer ou le modifier !')
+
+        for direction in self.examinations:
+            exam_name = self.examinations[direction]
+            exam = self.case.Examinations[exam_name]
+
+            # Verification de la présence de la table sur les deux scanners
+            if not has_contour(self.case, exam_name, 'Upper pallet'):
+                raise NameError(f'Structures de table absentes sur le scanner {exam_name}. Veuillez les créer !')
+
+            # -------------------------------------------------------------------------------
+            # verification de la presence des fichiers
+
+            directory = r"G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT"
+            if direction == 'HFS':
+                if not self.pedia:
+                    filename = "adultesHFS.csv"
+                else:
+                    filename = "pediatrique.csv"
+            else:
+                filename = "adultesFFS.csv"
+
+            if not os.path.isfile(os.path.join(directory, filename)):
+                raise NameError(f'Fichier {filename} absent !')
 
     def pediatrique(self):
         # S'il n'y a qu'un scanner HFS et que le contour externe mesure moins de 130cm, on peut faire un seul plan
@@ -113,9 +173,14 @@ class Patient:
             else:
                 print("le patient semble trop grand (taille supérieure à 130cm). Nécessite une acquisition FFS")
 
-    def set_primary(self, exam_name):
+    def set_primary(self, exam_name, direction = None):
         """Méthode très importante. Permet de définir un exam en 'primary et d'en récupérer les propriétés.
          Input : nom de l'examen à mettre en primary"""
+
+        if direction is None:
+            direction = self.direction
+        else:
+            self.direction = direction
 
         self.case.Examinations[exam_name].SetPrimary()
         self.examination = get_current("Examination")
@@ -124,7 +189,14 @@ class Patient:
         # -------------------------------------------------------------------------------------
         # Récupération de la position de tous les POI sur le scanner HFS
         # todo: à simplifier avec plusieurs typo
-        self.jonction = self.get_point_coords('jonction')
+
+        if direction == 'HFS':
+            round_it = True
+        else:
+            round_it = False
+
+        self.jonction = self.get_point_coords('jonction', round_it)
+
         if not self.jonction:
             print('pas de point jonction!!!!!!!!!')
 
@@ -135,20 +207,11 @@ class Patient:
             self.abdomen = self.get_point_coords(self.poi_abdo)
 
         # --------------------------------------------------------------------------------------
-        # Création du point zero (crane) situé à 0,0,hauteur table (valeur exprimée en mm convertie en cm)
+        # Création du point zero (abdo) situé à 0,0,hauteur table (valeur exprimée en mm convertie en cm)
         zero_scan = \
             self.case.Examinations[self.exam_name].GetStoredDicomTagValueForVerification(Group=0x0018, Element=0x1130)[
                 'Table Height']
-
-        # --------------------------------------------------------------------------------------
-        # Pour la travail, j'ai travaillé avec des scanners de toulouse dont les propriétés ne sont pas les mêmes que
-        # les nôtres
-        if self.doctor == 'IZAR^FRANCOISE':  # si c'est le cas de toulouse, on prend zéro
-            print("Il s'agit du cas test de toulouse, on utilise donc z = 0")
-            self.zero_scan = 0
-        else:
-            print("Il ne s'agit pas du cas test de toulouse, on utilise donc z = HT")
-            self.zero_scan = -float(zero_scan) / 10
+        self.zero_scan = -float(zero_scan) / 10
 
         # --------------------------------------------------------------------------------------
         # Récupération de la coordonnée la plus haute de la table (upper pallet) dans le but de mettre le laser vert
@@ -160,7 +223,7 @@ class Patient:
                 self.upper_pallet = self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries[
                     pallet].GetBoundingBox()[0].y
             else:
-                raise NameError('La structure de table est vide!')
+                raise NameError('La structure de table est vide! Veuillez la créer!"')
         else:
             raise NameError("La structure de table n'existe pas. Veuillez la créer!")
 
@@ -189,9 +252,11 @@ class Patient:
                                           self.external_name].GetBoundingBox()]
         print(f"External name : {self.external_name}")
 
-        # --------------------------------------------------------------------------------------
-        # Création du point DSP
-
+    def create_dsp(self):
+        """
+        Création du point DSP si pas pédiatrique et si n'existe pas déjà
+        :return:
+        """
         if self.examinations['FFS'] == self.exam_name:
             self.poi_DSP = [self.jonction[0], self.jonction[1] + 3, self.jonction[2]]
             self.create_poi('dsp', self.poi_DSP, color='Black')
@@ -250,7 +315,7 @@ class Patient:
             self.algebra(out_roi=roi_name, in_roiA=[roi_name], in_roiB=[obj_patient.external_name], margeB=-0.3,
                          ResultOperation="Intersection", derive=False)
 
-    def get_point_coords(self, point_name):
+    def get_point_coords(self, point_name, round_it = True):
         """ Méthode permettant de récupérer les coordonnées d'un point si celui-ci existe. \n
         - Input: nom du point \n
         - Outupt: coordonnées du point (x,y,z) ou None"""
@@ -264,6 +329,13 @@ class Patient:
         # Un point peut exister mais ne pas avoir de coordonnées dans l'exam!
         if coords is not None:
             print(f'---> Point {point_name} trouvé! ...')
+
+            # Pour arrondir les coordonnées et modifier le point!
+            if round_it:
+                x,y,z = coords.x, coords.y, coords.z
+                x,y,z = x,y,round_to_nearest_half_int(z)
+                self.case.PatientModel.StructureSets[self.exam_name].PoiGeometries[point_name].Point = {'x': x, 'y': y, 'z': z}
+
             return coords.x, coords.y, coords.z
         else:
             return None
@@ -328,13 +400,13 @@ class Patient:
          Output: self.examinations = dictionnaire {"nom_duCT_HFS":"HFS", "nom_duCT_FFS":"FFS"}"""
         examinations = {}
         for exam in self.case.Examinations:
+            # On ne travaille que sur les images CT
             if exam.EquipmentInfo.Modality == 'CT':
                 data = exam.GetAcquisitionDataFromDicom()
                 description = data['SeriesModule']['SeriesDescription']
                 print(exam.Name, description)
-                if "mdd" in description.lower() and not self.doctor == 'IZAR^FRANCOISE':
-                    examinations[exam.PatientPosition] = exam.Name
-                else:
+                # On ne prend que les images reconstruites en mdd
+                if "mdd" in description.lower():
                     examinations[exam.PatientPosition] = exam.Name
         self.examinations = examinations
         return self.examinations
@@ -369,11 +441,14 @@ class Patient:
 
 
 if __name__ == '__main__':
+    print("\n-----------------------------\nCREATION DE LA DOSIMETRIE ICT\n----------------------------- \n")
+    print("Les fichiers csv contenant les objectifs et contraintes dosimétriques seront lus dans le répertoire :\n"
+          r"->  G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT", "\n")
 
     # Création de l'objet patient. Définit par défaut le scanner HFS en primary
     obj_patient = Patient()
 
-    # Enfant ou adulte?
+    # Enfant ou adulte? True or False
     pediatrique = obj_patient.pedia
 
     # ------------------------------------------------------------------------------------
@@ -395,86 +470,92 @@ if __name__ == '__main__':
         #########################################################################
 
         if not pediatrique:
-                # Première partie, réalisation du recalage rigide
-                # Suppression pure et simple de tous les FOR registration déjà existants
+            # Première partie, réalisation du recalage rigide
+            # Suppression pure et simple de tous les FOR registration déjà existants
 
-                for reg in obj_patient.case.Registrations:
-                    FFOR = reg.FromFrameOfReference
-                    RFOR = reg.ToFrameOfReference
-                    obj_patient.case.RemoveFrameOfReferenceRegistration(
-                        FloatingFrameOfReference=FFOR,
-                        ReferenceFrameOfReference=RFOR)
+            for reg in obj_patient.case.Registrations:
+                FFOR = reg.FromFrameOfReference
+                RFOR = reg.ToFrameOfReference
+                obj_patient.case.RemoveFrameOfReferenceRegistration(
+                    FloatingFrameOfReference=FFOR,
+                    ReferenceFrameOfReference=RFOR)
+                print('-> Un recalage a été supprimé')
 
-                # Création du recalage entre le scanner FFS et le scanner HFS
-                # 1. création du for reg
-                obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
-                    FromExaminationName=obj_patient.examinations['HFS'], ToExaminationName=obj_patient.examinations['FFS'],
-                    RegistrationName="HFS to FFS", Description=None)
+            # Création du recalage entre le scanner FFS et le scanner HFS
+            # 1. création du for reg
+            print(f'Recalage rigide entre {obj_patient.examinations["HFS"]} et {obj_patient.examinations["FFS"]}')
+            obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
+                FromExaminationName=obj_patient.examinations['HFS'], ToExaminationName=obj_patient.examinations['FFS'],
+                RegistrationName="HFS to FFS", Description=None)
 
-                # recalage automatique
-                obj_patient.case.ComputeGrayLevelBasedRigidRegistration(
-                    FloatingExaminationName=obj_patient.examinations['HFS'],
-                    ReferenceExaminationName=obj_patient.examinations[
-                        'FFS'],
-                    UseOnlyTranslations=True, HighWeightOnBones=True,
-                    InitializeImages=True, FocusRoisNames=[],
-                    RegistrationName=None)
+            # recalage automatique
+            obj_patient.case.ComputeGrayLevelBasedRigidRegistration(
+                FloatingExaminationName=obj_patient.examinations['HFS'],
+                ReferenceExaminationName=obj_patient.examinations[
+                    'FFS'],
+                UseOnlyTranslations=True, HighWeightOnBones=True,
+                InitializeImages=True, FocusRoisNames=[],
+                RegistrationName=None)
+            print("-> Ok!")
 
-                # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity avec la
-                # vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
-
-                obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
-                                                                TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                                RoiNames=["Vessie"], ImageRegistrationNames=[],
-                                                                TargetExaminationNamesToSkipAddedReg=[
-                                                                    obj_patient.examinations['FFS']])
-
-                # Création du recalage élastique rigide
-                reg_name = "elastique rigide"
-                obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
-                                                                                      ReferenceExaminationName=
-                                                                                      obj_patient.examinations['HFS'],
-                                                                                      TargetExaminationNames=[
-                                                                                          obj_patient.examinations["FFS"]],
-                                                                                      ControllingRoiNames=["Vessie"],
-                                                                                      ControllingPoiNames=[],
-                                                                                      FocusRoiNames=[],
-                                                                                      AlgorithmSettings={
-                                                                                          'NumberOfResolutionLevels': 1,
-                                                                                          'InitialResolution': {'x': 0.5,
-                                                                                                                'y': 0.5,
-                                                                                                                'z': 0.5},
-                                                                                          'FinalResolution': {'x': 0.25,
-                                                                                                              'y': 0.25,
-                                                                                                              'z': 0.5},
-                                                                                          'InitialGaussianSmoothingSigma': 2,
-                                                                                          'FinalGaussianSmoothingSigma': 0.333333333333333,
-                                                                                          'InitialGridRegularizationWeight': 400,
-                                                                                          'FinalGridRegularizationWeight': 400,
-                                                                                          'ControllingRoiWeight': 0.5,
-                                                                                          'ControllingPoiWeight': 0.1,
-                                                                                          'MaxNumberOfIterationsPerResolutionLevel': 1000,
-                                                                                          'ImageSimilarityMeasure': "None",
-                                                                                          'DeformationStrategy': "Default",
-                                                                                          'ConvergenceTolerance': 1E-05})
-
-                # mapping des POI d'un scanner vers l'autre
-                pois = ["jonction", obj_patient.poi_abdo]
-
-                obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
-                                                            CreateNewPois=False,
-                                                            StructureRegistrationGroupNames=[reg_name],
-                                                            ReferenceExaminationNames=[obj_patient.examinations['HFS']],
+            # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity avec la
+            # vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
+            print(f"Copie de la structure Vessie d'un scanner à l'autre ...")
+            obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
                                                             TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                            ReverseMapping=False, AbortWhenBadDisplacementField=False)
+                                                            RoiNames=["Vessie"], ImageRegistrationNames=[],
+                                                            TargetExaminationNamesToSkipAddedReg=[
+                                                                obj_patient.examinations['FFS']])
+
+            # Création du recalage élastique rigide
+            print(f"Réalisation d'un recalage élastique (rigide, basé sur la vessie comme structure de contrôle) ...")
+            reg_name = "elastique rigide"
+            obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
+                                                                                  ReferenceExaminationName=
+                                                                                  obj_patient.examinations['HFS'],
+                                                                                  TargetExaminationNames=[
+                                                                                      obj_patient.examinations["FFS"]],
+                                                                                  ControllingRoiNames=["Vessie"],
+                                                                                  ControllingPoiNames=[],
+                                                                                  FocusRoiNames=[],
+                                                                                  AlgorithmSettings={
+                                                                                      'NumberOfResolutionLevels': 1,
+                                                                                      'InitialResolution': {'x': 0.5,
+                                                                                                            'y': 0.5,
+                                                                                                            'z': 0.5},
+                                                                                      'FinalResolution': {'x': 0.25,
+                                                                                                          'y': 0.25,
+                                                                                                          'z': 0.5},
+                                                                                      'InitialGaussianSmoothingSigma': 2,
+                                                                                      'FinalGaussianSmoothingSigma': 0.333333333333333,
+                                                                                      'InitialGridRegularizationWeight': 400,
+                                                                                      'FinalGridRegularizationWeight': 400,
+                                                                                      'ControllingRoiWeight': 0.5,
+                                                                                      'ControllingPoiWeight': 0.1,
+                                                                                      'MaxNumberOfIterationsPerResolutionLevel': 1000,
+                                                                                      'ImageSimilarityMeasure': "None",
+                                                                                      'DeformationStrategy': "Default",
+                                                                                      'ConvergenceTolerance': 1E-05})
+            print("-> Ok!")
+
+            # mapping des POI d'un scanner vers l'autre
+            print("Mapping des points jonction et abdo...")
+            pois = ["jonction", obj_patient.poi_abdo]
+
+            obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
+                                                        CreateNewPois=False,
+                                                        StructureRegistrationGroupNames=[reg_name],
+                                                        ReferenceExaminationNames=[obj_patient.examinations['HFS']],
+                                                        TargetExaminationNames=[obj_patient.examinations['FFS']],
+                                                        ReverseMapping=False, AbortWhenBadDisplacementField=False)
 
         # Travail sur les volumes
+        print("\nTravail sur les ROI...")
         # Création des ROI
         if not pediatrique:
             ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins',
-                        'opt PTV HFS', 'PTV Paroi thoracique']
-            colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633", '#696100',
-                      None]
+                        'opt PTV HFS']
+            colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633", '#696100']
         else:
             ROI_LIST = ['PTV HFS', 'PTV poumons', 'PTV robustesse', 'PTV reins', 'opt PTV HFS']
             colors = ["#0080C0", "#66FFFF", None, "#666633", '#696100']
@@ -486,8 +567,7 @@ if __name__ == '__main__':
         roi]
 
         # ------------------------------------------------------------------------------------
-        # On commence d'abord sur le scanner Head First puis on travaille sur le Feet First. SI pédiatrique, on ne
-        # travaille que sur le HFS
+        # On commence d'abord sur le scanner Head First puis on travaille sur le Feet First. Si pédiatrique, on ne
         # travaille que sur le HFS
 
         for direction in to_do:
@@ -496,7 +576,7 @@ if __name__ == '__main__':
             ct = obj_patient.case.Examinations[ct_name]
 
             # ct étudié mis en primary (très important, car re-définit self.exam_name et self.examination dans la classe
-            obj_patient.set_primary(ct_name)
+            obj_patient.set_primary(ct_name,direction)
 
             # Retrait des trous dans externe
             obj_patient.case.PatientModel.StructureSets[ct_name].SimplifyContours(RoiNames=[obj_patient.external_name],
@@ -508,8 +588,20 @@ if __name__ == '__main__':
                                                                                   CreateCopyOfRoi=False,
                                                                                   ResolveOverlappingContours=True)
 
-            # créer poumon G+D
-            obj_patient.algebra(out_roi="Poumons", in_roiA=["Poumon D", "Poumon G"], color="Aqua")
+            # créer poumon G+D. On réalise +0.5 / -0.5 pour supprimer les défauts du volume
+            obj_patient.algebra(out_roi="Poumons", in_roiA=["Poumon D", "Poumon G"], margeA=0.5, color="Aqua",
+                                derive=False)
+            obj_patient.algebra(out_roi="Poumons", in_roiA=["Poumons"], margeA=-0.5, color="Aqua",
+                                derive=False)
+            # Remove holes
+            obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].SimplifyContours(RoiNames=["Poumons"],
+                                                                                                RemoveHoles3D=True,
+                                                                                                RemoveSmallContours=False,
+                                                                                                AreaThreshold=None,
+                                                                                                ReduceMaxNumberOfPointsInContours=False,
+                                                                                                MaxNumberOfPoints=None,
+                                                                                                CreateCopyOfRoi=False,
+                                                                                                ResolveOverlappingContours=False)
 
             # créer somme des reins
             obj_patient.algebra(out_roi="Reins", in_roiA=["Rein D", "Rein G"], color="Yellow")
@@ -538,7 +630,7 @@ if __name__ == '__main__':
                 haut_PTV1 = y0 + 4
                 from_to.append(["PTV HFS", obj_patient.lim_sup, haut_PTV1])
 
-                # Réalisation du PTV FFS : en dessous du PTV E
+                # Réalisation du PTV FFS : en dessous du PTV 4
                 from_to.append(['PTV FFS', y0 - 4, obj_patient.lim_inf])
 
                 # Une fois que toutes les bornes sont déterminées, on crée les PTVS
@@ -588,8 +680,17 @@ if __name__ == '__main__':
                 # Création PTV poumons = poumons - 1cm # seulement pour le scanner HFS!
                 obj_patient.algebra(out_roi='PTV poumons', in_roiA=["Poumons"], margeA=-1, Type="Ptv", color="Yellow")
 
-                # PTV paroi thoracique = paroi thoracique
-                obj_patient.algebra(out_roi='PTV Paroi thoracique', in_roiA=["Paroi thoracique"],derive=False)
+                # PTV paroi thoracique = paroi thoracique + expansion du poumon de 1.5 cm + coeur. Ce volume est utilisé
+                # pour que l'optimisation sur les poumons ne diminue pas trop la couverture aux alentours
+
+                # 1. Expansion des poumons
+                obj_patient.algebra(out_roi='opt pourtour poumons', in_roiA=["Poumons"], margeA=1.5,
+                                    in_roiB=["Poumons"],
+                                    margeB=0, ResultOperation="Subtraction", derive=False)
+                # 2. Union du PTV, de l'expansion et du coeur puis rétraction à la peau
+                obj_patient.algebra(out_roi='PTV Paroi thoracique', in_roiA=["opt pourtour poumons", "Coeur"],
+                                    in_roiB=[obj_patient.external_name], margeB=-0.3, ResultOperation="Intersection",
+                                    Type="Ptv", derive=False)
 
                 # Création PTV reins = reins - 1cm # seulement pour le scanner HFS!
                 obj_patient.algebra(out_roi='PTV reins', in_roiA=["Reins"], margeA=-1, Type="Ptv", color="Yellow")
@@ -602,14 +703,12 @@ if __name__ == '__main__':
                 obj_patient.algebra(out_roi='opt PTV HFS', in_roiA=["PTV HFS"], in_roiB=["Poumons", 'Reins'],
                                     ResultOperation="Subtraction", derive=False)
 
-
             else:
-
                 # Supprimer la dérivation
                 obj_patient.case.PatientModel.RegionsOfInterest['PTV poumons'].DeleteExpression()
                 obj_patient.case.PatientModel.RegionsOfInterest['PTV reins'].DeleteExpression()
                 obj_patient.case.PatientModel.RegionsOfInterest['Reins'].DeleteExpression()
-                obj_patient.case.PatientModel.RegionsOfInterest['Poumons'].DeleteExpression()
+                # obj_patient.case.PatientModel.RegionsOfInterest['Poumons'].DeleteExpression()
 
     #########################################################################
     #########################################################################
@@ -874,7 +973,7 @@ if __name__ == '__main__':
 
                 # Attribution du champ 5 et du pitch de 0.5
                 pitch = 0.5
-                max_delivery_factor = 1.2
+                max_delivery_factor = 1.3
 
                 for num in range(len(beam_names)):
                     plan.PlanOptimizations[0].OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
@@ -888,6 +987,7 @@ if __name__ == '__main__':
                                                                                          MaxDeliveryTimeFactor=max_delivery_factor)
 
                 # modification du point de specification de dose pour le plan FFS (sinon export impossible)
+                obj_patient.create_dsp()
                 xd, yd, zd = obj_patient.poi_DSP
                 retval_0 = beam_set.CreateDoseSpecificationPoint(Name="DSP", Coordinates={'x': xd,
                                                                                           'y': yd,
@@ -907,6 +1007,9 @@ if __name__ == '__main__':
         ###############################################################################################################
         ###############################################################################################################
 
+        # Les paramètres d'optimisation sont inscrits dans un fichier csv dans le g commun. Le fichier est lu avec
+        # pandas
+
         directory = r"G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT"
 
         if direction == 'HFS':
@@ -914,7 +1017,7 @@ if __name__ == '__main__':
                 filename = "adultesHFS.csv"
             else:
                 filename = "pediatrique.csv"
-        else :
+        else:
             filename = "adultesFFS.csv"
 
         csv_path = os.path.join(directory, filename)
@@ -926,8 +1029,11 @@ if __name__ == '__main__':
             DoseLevel = row.DoseLevel * total_dose
             Weight = row.Weight
             IsRobust = row.IsRobust
+            IsConstraint = row.IsConstraint
             HighDoseLevel = row.HighDoseLevel * total_dose
-            set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, HighDoseLevel)
+
+            # Utilisation de la fonction set_obj_function (définie hors classe)
+            set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel)
 
         ###############################################################################################################
         ###############################################################################################################
