@@ -20,6 +20,12 @@ from easygui import multenterbox, ynbox
 from datetime import datetime
 
 
+# -------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------
+# FONCTIONS
+# -------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------
+
 def check_roi(case, roi_to_check):
     # this method checks if a toi exists
     roi_check = False
@@ -91,6 +97,12 @@ def round_to_nearest_half_int(num):
     return round(num * 2) / 2
 
 
+# -------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------
+# CLASSE
+# -------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------
+
 class Patient:
     def __init__(self):
 
@@ -109,6 +121,7 @@ class Patient:
         self.lim_sup = None
         self.upper_pallet = None
         self.direction = 'HFS'
+        self.directory = r"G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT\csv_files"
 
         # Récupération des informations des CT (nom + scan position HFS ou FFS)
         self.examinations = self.get_ct_list()  # dictionnaire {"exam_name":"FFS/HFS", ...}
@@ -146,16 +159,18 @@ class Patient:
             # -------------------------------------------------------------------------------
             # verification de la presence des fichiers
 
-            directory = r"G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT"
             if direction == 'HFS':
-                if not self.pedia:
-                    filename = "adultesHFS.csv"
+                if not self.pediatrique:
+                    if total_dose > 800:
+                        filename = "adultesHFS.csv"
+                    else:
+                        filename = "2GyHFS.csv"
                 else:
                     filename = "pediatrique.csv"
             else:
                 filename = "adultesFFS.csv"
 
-            if not os.path.isfile(os.path.join(directory, filename)):
+            if not os.path.isfile(os.path.join(self.directory, filename)):
                 raise NameError(f'Fichier {filename} absent !')
 
     def pediatrique(self):
@@ -173,7 +188,7 @@ class Patient:
             else:
                 print("le patient semble trop grand (taille supérieure à 130cm). Nécessite une acquisition FFS")
 
-    def set_primary(self, exam_name, direction = None):
+    def set_primary(self, exam_name, direction=None):
         """Méthode très importante. Permet de définir un exam en 'primary et d'en récupérer les propriétés.
          Input : nom de l'examen à mettre en primary"""
 
@@ -315,7 +330,7 @@ class Patient:
             self.algebra(out_roi=roi_name, in_roiA=[roi_name], in_roiB=[obj_patient.external_name], margeB=-0.3,
                          ResultOperation="Intersection", derive=False)
 
-    def get_point_coords(self, point_name, round_it = True):
+    def get_point_coords(self, point_name, round_it=True):
         """ Méthode permettant de récupérer les coordonnées d'un point si celui-ci existe. \n
         - Input: nom du point \n
         - Outupt: coordonnées du point (x,y,z) ou None"""
@@ -332,9 +347,10 @@ class Patient:
 
             # Pour arrondir les coordonnées et modifier le point!
             if round_it:
-                x,y,z = coords.x, coords.y, coords.z
-                x,y,z = x,y,round_to_nearest_half_int(z)
-                self.case.PatientModel.StructureSets[self.exam_name].PoiGeometries[point_name].Point = {'x': x, 'y': y, 'z': z}
+                x, y, z = coords.x, coords.y, coords.z
+                x, y, z = x, y, round_to_nearest_half_int(z)
+                self.case.PatientModel.StructureSets[self.exam_name].PoiGeometries[point_name].Point = {'x': x, 'y': y,
+                                                                                                        'z': z}
 
             return coords.x, coords.y, coords.z
         else:
@@ -411,7 +427,7 @@ class Patient:
         self.examinations = examinations
         return self.examinations
 
-    def create_ROI(self, roi_name, color=None, roi_type='Ptv'):
+    def create_roi(self, roi_name, color=None, roi_type='Ptv'):
         """Méthode utilisée pour créer des volumes de type PTV
         Si on ne donne pas de couleur, celle-ci est prise aléatoirement"""
 
@@ -440,16 +456,49 @@ class Patient:
                 'x': x, 'y': y, 'z': z}
 
 
+# -------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------
+# MAIN
+# -------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------
+
 if __name__ == '__main__':
-    print("\n-----------------------------\nCREATION DE LA DOSIMETRIE ICT\n----------------------------- \n")
-    print("Les fichiers csv contenant les objectifs et contraintes dosimétriques seront lus dans le répertoire :\n"
-          r"->  G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT", "\n")
 
     # Création de l'objet patient. Définit par défaut le scanner HFS en primary
     obj_patient = Patient()
 
     # Enfant ou adulte? True or False
     pediatrique = obj_patient.pedia
+
+    print("\n-----------------------------\nCREATION DE LA DOSIMETRIE ICT\n----------------------------- \n")
+    print("Les fichiers csv contenant les objectifs et contraintes dosimétriques seront lus dans le répertoire :\n"
+          rf"->  {obj_patient.directory}", "\n")
+
+    # définition de la prescription (2Gy ou 12 Gy?)
+    verif = 0
+    msg = "Entrer les informations de la prescription"
+    title = "Prescription"
+    fields = ("Nombre de fractions", "Dose totale (Gy)")
+
+    easygui = True  # mettre False pour ne pas afficher la fenêtre en mode programmation !
+
+    # Cette section permet d'afficher une fenêtre permettant d'entrer la prescription
+    # todo: remplacer par la méthode automatique de requête Mosaiq.
+    if easygui:
+        while verif != 1:
+            mes_choix = multenterbox(msg, title, fields)
+            number_of_fractions = int(mes_choix[0])
+            total_dose = float(mes_choix[1]) * 100
+            fraction_dose = total_dose / number_of_fractions
+
+            if fraction_dose != 200:
+                msg = "Une erreur a été commise. \nVérifiez les données entrées et recommencez !"
+            else:
+                break
+    else:
+        number_of_fractions = 6
+        total_dose = 1200
+        fraction_dose = 200
 
     # ------------------------------------------------------------------------------------
     # On commencera d'abord sur le scanner Head First puis on travaille sur le Feet First. SI pédiatrique, on ne
@@ -498,8 +547,8 @@ if __name__ == '__main__':
                 RegistrationName=None)
             print("-> Ok!")
 
-            # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity avec la
-            # vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
+            # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity
+            # avec la vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
             print(f"Copie de la structure Vessie d'un scanner à l'autre ...")
             obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
                                                             TargetExaminationNames=[obj_patient.examinations['FFS']],
@@ -552,18 +601,27 @@ if __name__ == '__main__':
         # Travail sur les volumes
         print("\nTravail sur les ROI...")
         # Création des ROI
-        if not pediatrique:
-            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins',
-                        'opt PTV HFS']
-            colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633", '#696100']
-        else:
+        if not pediatrique:  # Patients adultes
+
+            if total_dose > 800:  # Prescription 12 Gy
+                ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins',
+                            'opt PTV HFS']
+                colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633",
+                          '#696100']
+
+            else:  # Prescriptions 2 ou 8 Gy. On n'a plus besoin d'OAR car la dose est inférieure ou égale
+                # aux contraintes
+                ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS"]
+                colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0"]
+
+        else:  # Enfants
             ROI_LIST = ['PTV HFS', 'PTV poumons', 'PTV robustesse', 'PTV reins', 'opt PTV HFS']
             colors = ["#0080C0", "#66FFFF", None, "#666633", '#696100']
 
         # Vérification de l'existance des differentes roi dans le case
         resultat = [check_roi(obj_patient.case, roi) for roi in ROI_LIST]
         # Création des ROI dans le roi set si ROI non existantes
-        [obj_patient.create_ROI(ROI_LIST[index], color=colors[index]) for index, roi in enumerate(resultat) if not
+        [obj_patient.create_roi(ROI_LIST[index], color=colors[index]) for index, roi in enumerate(resultat) if not
         roi]
 
         # ------------------------------------------------------------------------------------
@@ -576,7 +634,7 @@ if __name__ == '__main__':
             ct = obj_patient.case.Examinations[ct_name]
 
             # ct étudié mis en primary (très important, car re-définit self.exam_name et self.examination dans la classe
-            obj_patient.set_primary(ct_name,direction)
+            obj_patient.set_primary(ct_name, direction)
 
             # Retrait des trous dans externe
             obj_patient.case.PatientModel.StructureSets[ct_name].SimplifyContours(RoiNames=[obj_patient.external_name],
@@ -676,12 +734,13 @@ if __name__ == '__main__':
                 ReduceMaxNumberOfPointsInContours=False, MaxNumberOfPoints=None, CreateCopyOfRoi=False,
                 ResolveOverlappingContours=True)
 
-            if direction == 'HFS':
+            if direction == 'HFS' and total_dose > 800:
+
                 # Création PTV poumons = poumons - 1cm # seulement pour le scanner HFS!
                 obj_patient.algebra(out_roi='PTV poumons', in_roiA=["Poumons"], margeA=-1, Type="Ptv", color="Yellow")
 
-                # PTV paroi thoracique = paroi thoracique + expansion du poumon de 1.5 cm + coeur. Ce volume est utilisé
-                # pour que l'optimisation sur les poumons ne diminue pas trop la couverture aux alentours
+                # PTV paroi thoracique = paroi thoracique + expansion du poumon de 1.5 cm + coeur. Ce volume est
+                # utilisé pour que l'optimisation sur les poumons ne diminue pas trop la couverture aux alentours
 
                 # 1. Expansion des poumons
                 obj_patient.algebra(out_roi='opt pourtour poumons', in_roiA=["Poumons"], margeA=1.5,
@@ -702,13 +761,14 @@ if __name__ == '__main__':
                 # opt PTV HFS = PTV HFS - Poumons - Reins
                 obj_patient.algebra(out_roi='opt PTV HFS', in_roiA=["PTV HFS"], in_roiB=["Poumons", 'Reins'],
                                     ResultOperation="Subtraction", derive=False)
-
             else:
-                # Supprimer la dérivation
-                obj_patient.case.PatientModel.RegionsOfInterest['PTV poumons'].DeleteExpression()
-                obj_patient.case.PatientModel.RegionsOfInterest['PTV reins'].DeleteExpression()
-                obj_patient.case.PatientModel.RegionsOfInterest['Reins'].DeleteExpression()
-                # obj_patient.case.PatientModel.RegionsOfInterest['Poumons'].DeleteExpression()
+                try:
+                    # Supprimer la dérivation
+                    obj_patient.case.PatientModel.RegionsOfInterest['PTV poumons'].DeleteExpression()
+                    obj_patient.case.PatientModel.RegionsOfInterest['PTV reins'].DeleteExpression()
+                    obj_patient.case.PatientModel.RegionsOfInterest['Reins'].DeleteExpression()
+                except:
+                    print("Impossible de supprimer la dérivation")
 
     #########################################################################
     #########################################################################
@@ -723,34 +783,6 @@ if __name__ == '__main__':
     BS_NAMES = ["r1", "r1"]
     PATIENT_POSITIONS = ["HeadFirstSupine", "FeetFirstSupine"]
     machine_name = "Radixact1"
-
-    ########################################################
-    # définition de la prescription
-    verif = 0
-
-    msg = "Entrer les informations de la prescription"
-    title = "Prescription"
-    fields = ("Nombre de fractions", "Dose totale (Gy)")
-
-    easygui = True
-
-    # Cette section permet d'afficher une fenêtre permettant d'entrer la prescription
-    # todo: remplacer par la méthode automatique de requête Mosaiq.
-    if easygui:
-        while verif != 1:
-            mes_choix = multenterbox(msg, title, fields)
-            number_of_fractions = int(mes_choix[0])
-            total_dose = float(mes_choix[1]) * 100
-            fraction_dose = total_dose / number_of_fractions
-
-            if fraction_dose != 200:
-                msg = "Une erreur a été commise. \nVérifiez les données entrées et recommencez !"
-            else:
-                break
-    else:
-        number_of_fractions = 6
-        total_dose = 1200
-        fraction_dose = 200
 
     # pour rappel: to_do == HFS pour pédia et [HFS,FFS] pour adultes > 130 cm
     for ind, direction in enumerate(to_do):
@@ -847,7 +879,7 @@ if __name__ == '__main__':
         plan.PlanOptimizations[0].OptimizationParameters.Algorithm.MaxNumberOfIterations = 30
         plan.PlanOptimizations[0].OptimizationParameters.DoseCalculation.ComputeFinalDose = True
 
-        # if ind = 0 = HFS la prescription est attribuée au PTV haut, sinon au PTV_E pour le plan FFS
+        # if ind = 0 = HFS la prescription est attribuée au PTV HFS, sinon au PTV FFS pour le plan FFS
         if direction == 'HFS':
             prescription_roi = 'PTV HFS'
         else:
@@ -1010,17 +1042,18 @@ if __name__ == '__main__':
         # Les paramètres d'optimisation sont inscrits dans un fichier csv dans le g commun. Le fichier est lu avec
         # pandas
 
-        directory = r"G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT"
-
         if direction == 'HFS':
             if not pediatrique:
-                filename = "adultesHFS.csv"
+                if total_dose > 800:
+                    filename = "adultesHFS.csv"
+                else:
+                    filename = "2GyHFS.csv"
             else:
                 filename = "pediatrique.csv"
         else:
             filename = "adultesFFS.csv"
 
-        csv_path = os.path.join(directory, filename)
+        csv_path = os.path.join(obj_patient.directory, filename)
         df = pd.read_csv(csv_path, sep=';')
 
         for row in df.iloc:
