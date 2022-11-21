@@ -248,14 +248,20 @@ class Patient:
             if exam.OfRoi.Type == 'External':
                 self.external_name = exam.OfRoi.Name
 
-        # Si pas d'external, le créer
+        # Si pas d'external, faire un message d'erreur
         if self.external_name is None:
-            external_name = "External_Auto"
-            retval_0 = self.case.PatientModel.CreateRoi(Name=external_name, Color="Green", Type="External",
-                                                        TissueName="",
-                                                        RbeCellTypeName=None, RoiMaterial=None)
-            retval_0.CreateExternalGeometry(Examination=self.examination, ThresholdLevel=-250)
-            self.external_name = external_name
+            raise NameError("Contour externe absent. Veuillez le créer ! \n"
+                            "-> Remarques importantes :\n "
+                            "- Vérifier les cavités d'aires (absence de trous)\n"
+                            "- Vérifier que les doigts n'ont pas été supprimés lors de la simplification\n"
+                            "- Vérifier l'absence d'externe dans les zones denses de l'omniboard")
+
+            # external_name = "External_Auto"
+            # retval_0 = self.case.PatientModel.CreateRoi(Name=external_name, Color="Green", Type="External",
+            #                                             TissueName="",
+            #                                             RbeCellTypeName=None, RoiMaterial=None)
+            # retval_0.CreateExternalGeometry(Examination=self.examination, ThresholdLevel=-250)
+            # self.external_name = external_name
 
         # si le contour existe, mais qu'il est vide, il faut le créer
         if not has_contour(self.case, self.exam_name, self.external_name):
@@ -421,10 +427,17 @@ class Patient:
                 data = exam.GetAcquisitionDataFromDicom()
                 description = data['SeriesModule']['SeriesDescription']
                 print(exam.Name, description)
-                # On ne prend que les images reconstruites en mdd
-                if "mdd" in description.lower():
+                # On ne prend que les images reconstruites en mdd 
+                if "mdd" in description.lower() :
                     examinations[exam.PatientPosition] = exam.Name
         self.examinations = examinations
+
+        if not examinations:
+            raise NameError("Aucun scanner trouvé. Deux causes possibles:\n"
+                            "1 - Le ou les scanners n'ont pas 'HFS' ou 'FFS' en orientation\n"
+                            "2 - Aucun scanner 'mdd' n'a été trouvé (scanner Br38 au lieu de Sn40)")
+
+
         return self.examinations
 
     def create_roi(self, roi_name, color=None, roi_type='Ptv'):
