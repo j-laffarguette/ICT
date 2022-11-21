@@ -56,7 +56,7 @@ def set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, I
     """
 
     # Création de la fonction
-    plan.PlanOptimizations[0].AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
+    plan.AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
                                                       IsConstraint=IsConstraint,
                                                       RestrictAllBeamsIndividually=False,
                                                       RestrictToBeam=None, IsRobust=IsRobust,
@@ -68,11 +68,11 @@ def set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, I
     # et les contraintes
 
     if IsConstraint:
-        n_functions = len(plan.PlanOptimizations[0].Constraints)
-        dose = plan.PlanOptimizations[0].Constraints[n_functions - 1]
+        n_functions = len(plan.Constraints)
+        dose = plan.Constraints[n_functions - 1]
     else:
-        n_functions = len(plan.PlanOptimizations[0].Objective.ConstituentFunctions)
-        dose = plan.PlanOptimizations[0].Objective.ConstituentFunctions[n_functions - 1]
+        n_functions = len(plan.Objective.ConstituentFunctions)
+        dose = plan.Objective.ConstituentFunctions[n_functions - 1]
 
     if RoiName == dose.OfDoseGridRoi.OfRoiGeometry.OfRoi.Name:  # Vérification que tout va bien
         print(RoiName)
@@ -130,9 +130,7 @@ class Patient:
         self.set_primary(self.examinations['HFS'])
         self.pediatrique()
 
-        self.verifications()
-
-    def verifications(self):
+    def verifications(self, total_dose):
         # ----------------------------------------------------------
         # VERIF de la table. On ne vérifie que Upper Pallet
         # Verification de la présence de la roi upper pallet
@@ -162,13 +160,16 @@ class Patient:
             if direction == 'HFS':
                 if not self.pediatrique:
                     if total_dose > 800:
-                        filename = "adultesHFS.csv"
+                        filename = "12Gy_corps.csv"
                     else:
-                        filename = "2GyHFS.csv"
+                        filename = "2Gy_corps.csv"
                 else:
-                    filename = "pediatrique.csv"
+                    if total_dose > 800:
+                        filename = "12Gy_corps.csv"
+                    else:
+                        filename = "jambes.csv"
             else:
-                filename = "adultesFFS.csv"
+                filename = "jambes.csv"
 
             if not os.path.isfile(os.path.join(self.directory, filename)):
                 raise NameError(f'Fichier {filename} absent !')
@@ -428,7 +429,7 @@ class Patient:
                 description = data['SeriesModule']['SeriesDescription']
                 print(exam.Name, description)
                 # On ne prend que les images reconstruites en mdd
-                if "mdd" in description.lower():
+                if "mdd" in description.lower() or "br38" in description.lower():
                     examinations[exam.PatientPosition] = exam.Name
         self.examinations = examinations
 
@@ -512,16 +513,19 @@ if __name__ == '__main__':
         total_dose = 1200
         fraction_dose = 200
 
+    # Vérification que tout va bien avant de lancer le script (présence de toutes les structures, des fichiers csv etc)
+    obj_patient.verifications(total_dose)
+
     # ------------------------------------------------------------------------------------
     # On commencera d'abord sur le scanner Head First puis on travaille sur le Feet First. SI pédiatrique, on ne
     # travaille que sur le HFS. La liste to_do est utilisée plus loin dans le script.
     if pediatrique:
-        to_do = ['HFS']
+        to_do = ['HFS', 'HFS']
     else:
         to_do = ['HFS', 'FFS']
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
-    do_it = True
+    do_it = False
 
     if do_it:
         #########################################################################
@@ -672,59 +676,58 @@ if __name__ == '__main__':
             # créer somme des reins
             obj_patient.algebra(out_roi="Reins", in_roiA=["Rein D", "Rein G"], color="Yellow")
 
-            if not pediatrique:
-                # ------------------------------------------------------------------------------------
-                # Création des cylindres
-                # récupération du point "jonction", positionné sur la bille au niveau de la jonction
-                _, _, y0 = obj_patient.jonction  # y de ref est au niveau de la jonction
-                x0, z0 = 0, obj_patient.zero_scan
+            # ------------------------------------------------------------------------------------
+            # Création des cylindres
+            # récupération du point "jonction", positionné sur la bille au niveau de la jonction
+            _, _, y0 = obj_patient.jonction  # y de ref est au niveau de la jonction
+            x0, z0 = 0, obj_patient.zero_scan
 
-                # Réalisation des PTV 2 à 5, entourant la bille jonction
-                for index, roi in enumerate(['PTV_1', 'PTV_2', 'PTV_3', 'PTV_4']):
-                    # y0 est au niveau de la premiere coupe de PTV_2
-                    # la premiere coupe de PTV_3 est donc située à -2; celle de D1 à +2 etc
-                    # soit -2 ; 0 ; 2 ; 4 -> 4-2*i
-                    yhaut = y0 + 4 - 2 * index
-                    y_bas = yhaut - 2
-                    obj_patient.create_cylinder_ptv(roi, yhaut, y_bas)
+            # Liste qui contiendra pour chaque volume, son point de départ et son point d'arrivée
+            from_to = []
 
-                # Liste qui contiendra pour chaque volume, son point de départ et son point d'arrivée
-                from_to = []
+            # Réalisation des PTV 2 à 5, entourant la bille jonction
+            for index, roi in enumerate(['PTV_1', 'PTV_2', 'PTV_3', 'PTV_4']):
+                # y0 est au niveau de la premiere coupe de PTV_2
+                # la premiere coupe de PTV_3 est donc située à -2; celle de D1 à +2 etc
+                # soit -2 ; 0 ; 2 ; 4 -> 4-2*i
+                yhaut = y0 + 4 - 2 * index
+                y_bas = yhaut - 2
+                from_to.append((roi, yhaut, y_bas))
 
-                # lim sup et inf correspondent au points les plus hauts et bas du contour externe
-                # Réalisation du "PTV HFS", au-dessus du dernier PTV de la jonction, jusqu'au sommet du crane
-                haut_PTV1 = y0 + 4
-                from_to.append(["PTV HFS", obj_patient.lim_sup, haut_PTV1])
+            # lim sup et inf correspondent au points les plus hauts et bas du contour externe
+            # Réalisation du "PTV HFS", au-dessus du dernier PTV de la jonction, jusqu'au sommet du crane
+            haut_PTV1 = y0 + 4
+            from_to.append(["PTV HFS", obj_patient.lim_sup, haut_PTV1])
 
-                # Réalisation du PTV FFS : en dessous du PTV 4
-                from_to.append(['PTV FFS', y0 - 4, obj_patient.lim_inf])
+            # Réalisation du PTV FFS : en dessous du PTV 4
+            from_to.append(['PTV FFS', y0 - 4, obj_patient.lim_inf])
 
-                # Une fois que toutes les bornes sont déterminées, on crée les PTVS
-                for roi, f, t in from_to:
-                    print(f'Création du PTV suivant : {roi} entre y = {str(f)} et y = {str(t)} ')
-                    obj_patient.create_cylinder_ptv(roi, f, t)
-                    print('-> OK!')
+            # Une fois que toutes les bornes sont déterminées, on crée les PTVS
+            for roi, f, t in from_to:
+                print(f'Création du PTV suivant : {roi} entre y = {str(f)} et y = {str(t)} ')
+                obj_patient.create_cylinder_ptv(roi, f, t)
+                print('-> OK!')
 
-                # Dernière étape: soustraction des volumes deux à deux pour éviter le chevauchement des PTVS
-                ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS"]
-                for i in range(len(ROI_LIST) - 1):
-                    obj_patient.algebra(out_roi=ROI_LIST[i], in_roiA=[ROI_LIST[i]], in_roiB=[ROI_LIST[i + 1]],
-                                        ResultOperation="Subtraction", derive=False)
+            # Dernière étape: soustraction des volumes deux à deux pour éviter le chevauchement des PTVS
+            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS"]
+            for i in range(len(ROI_LIST) - 1):
+                obj_patient.algebra(out_roi=ROI_LIST[i], in_roiA=[ROI_LIST[i]], in_roiB=[ROI_LIST[i + 1]],
+                                    ResultOperation="Subtraction", derive=False)
 
-                # Création d'un volume d'optimisation en sortie de jonction
-                # HFS -> PTV_D6 devient "opt_jonction"
-                # FFS -> PTV D1 devient "opt_jonction"
+            # Création d'un volume d'optimisation en sortie de jonction
+            # HFS -> PTV_D6 devient "opt_jonction"
+            # FFS -> PTV D1 devient "opt_jonction"
 
-                if direction == "HFS":
-                    source = "PTV FFS"
-                    OAR_name = "opt_jonction"
-                else:
-                    source = "PTV HFS"
-                    OAR_name = "opt_jonction"
+            if direction == "HFS":
+                source = "PTV FFS"
+                OAR_name = "opt_jonction"
+            else:
+                source = "PTV HFS"
+                OAR_name = "opt_jonction"
 
-                # Création du volume
-                obj_patient.algebra(out_roi=OAR_name, in_roiA=[source], color='Magenta', Type="Organ")
-                obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].DeleteExpression()
+            # Création du volume
+            obj_patient.algebra(out_roi=OAR_name, in_roiA=[source], color='Magenta', Type="Organ")
+            obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].DeleteExpression()
 
             # simplification des volumes pour éviter overlaps
             roi_list = [roi.Name for roi in obj_patient.case.PatientModel.RegionsOfInterest if roi.Type == "Support"]
@@ -780,13 +783,27 @@ if __name__ == '__main__':
     # Création des deux plans
     date = datetime.today().strftime('%Y%m%d')
     date = date[2:]  # Pour enlever les deux premiers chiffres de l'année (2022 -> 22)
-    PLAN_NAMES = [f"{date}_HFS", f"{date}_FFS"]
-    BS_NAMES = ["r1", "r1"]
-    PATIENT_POSITIONS = ["HeadFirstSupine", "FeetFirstSupine"]
+
+    if not pediatrique:
+        PLAN_NAMES = [f"{date}_HFS", f"{date}_FFS"]
+        PATIENT_POSITIONS = ["HeadFirstSupine", "FeetFirstSupine"]
+        DIRECTIONS = ['HFS','FFS']
+
+    elif pediatrique:
+        PLAN_NAMES = [f"{date}_HFS", f"{date}_HFS"]
+        PATIENT_POSITIONS = ["HeadFirstSupine", "HeadFirstSupine"]
+        DIRECTIONS = ['HFS', 'HFS']
+
+    PRESCRIPTION_ROI = ['PTV HFS', 'PTV FFS']
+    BS_NAMES = ["Corps", "Jambes"]
+    TREATMENT_TECHNIQUES = ["TomoHelical", "TomoDirect"]
     machine_name = "Radixact1"
 
-    # pour rappel: to_do == HFS pour pédia et [HFS,FFS] pour adultes > 130 cm
-    for ind, direction in enumerate(to_do):
+
+    for direction, plan_name, bs_name, patient_position, TreatmentTechnique, prescription_roi in zip(DIRECTIONS, PLAN_NAMES, BS_NAMES,
+                                                                                   PATIENT_POSITIONS,
+                                                                                   TREATMENT_TECHNIQUES,PRESCRIPTION_ROI):
+        print(f'----> Création du plan "{plan_name}" et du beam set "{bs_name}" ')
 
         # CT étudié en primary
         obj_patient.set_primary(obj_patient.examinations[direction])
@@ -801,10 +818,6 @@ if __name__ == '__main__':
             print('~~~~ Saving case ~~~~')
             obj_patient.patient.Save()
 
-        # Attribution des noms de plans et de beamsets
-        plan_name = PLAN_NAMES[ind]
-        bs_name = BS_NAMES[ind]
-
         # vérification de la non-existence du plan avant création
         list_of_plans = [plan.Name for plan in obj_patient.case.TreatmentPlans]
         if plan_name not in list_of_plans:
@@ -817,51 +830,27 @@ if __name__ == '__main__':
         list_of_bs = [bs.DicomPlanLabel for bs in obj_patient.case.TreatmentPlans[plan_name].BeamSets]
         if bs_name not in list_of_bs:
             # création du bs
-            if direction == "HFS":
-                obj_patient.case.TreatmentPlans[plan_name].AddNewBeamSet(Name=bs_name,
-                                                                         ExaminationName=obj_patient.exam_name,
-                                                                         MachineName=machine_name,
-                                                                         Modality="Photons",
-                                                                         TreatmentTechnique="TomoHelical",
-                                                                         PatientPosition=PATIENT_POSITIONS[ind],
-                                                                         NumberOfFractions=number_of_fractions,
-                                                                         CreateSetupBeams=False,
-                                                                         UseLocalizationPointAsSetupIsocenter=False,
-                                                                         UseUserSelectedIsocenterSetupIsocenter=False,
-                                                                         Comment="", RbeModelName=None,
-                                                                         EnableDynamicTrackingForVero=False,
-                                                                         NewDoseSpecificationPointNames=[],
-                                                                         NewDoseSpecificationPoints=[],
-                                                                         MotionSynchronizationTechniqueSettings={
-                                                                             'DisplayName': None,
-                                                                             'MotionSynchronizationSettings': None,
-                                                                             'RespiratoryIntervalTime': None,
-                                                                             'RespiratoryPhaseGatingDutyCycleTimePercentage': None,
-                                                                             'MotionSynchronizationTechniqueType': "Undefined"},
-                                                                         Custom=None, ToleranceTableLabel=None)
-            else:
-                obj_patient.case.TreatmentPlans[plan_name].AddNewBeamSet(Name=bs_name,
-                                                                         ExaminationName=obj_patient.exam_name,
-                                                                         MachineName=machine_name,
-                                                                         Modality="Photons",
-                                                                         TreatmentTechnique="TomoDirect",
-                                                                         PatientPosition="FeetFirstSupine",
-                                                                         NumberOfFractions=number_of_fractions,
-                                                                         CreateSetupBeams=False,
-                                                                         UseLocalizationPointAsSetupIsocenter=False,
-                                                                         UseUserSelectedIsocenterSetupIsocenter=False,
-                                                                         Comment="",
-                                                                         RbeModelName=None,
-                                                                         EnableDynamicTrackingForVero=False,
-                                                                         NewDoseSpecificationPointNames=[],
-                                                                         NewDoseSpecificationPoints=[],
-                                                                         MotionSynchronizationTechniqueSettings={
-                                                                             'DisplayName': None,
-                                                                             'MotionSynchronizationSettings': None,
-                                                                             'RespiratoryIntervalTime': None,
-                                                                             'RespiratoryPhaseGatingDutyCycleTimePercentage': None,
-                                                                             'MotionSynchronizationTechniqueType': "Undefined"},
-                                                                         Custom=None, ToleranceTableLabel=None)
+            obj_patient.case.TreatmentPlans[plan_name].AddNewBeamSet(Name=bs_name,
+                                                                     ExaminationName=obj_patient.exam_name,
+                                                                     MachineName=machine_name,
+                                                                     Modality="Photons",
+                                                                     TreatmentTechnique=TreatmentTechnique,
+                                                                     PatientPosition=patient_position,
+                                                                     NumberOfFractions=number_of_fractions,
+                                                                     CreateSetupBeams=False,
+                                                                     UseLocalizationPointAsSetupIsocenter=False,
+                                                                     UseUserSelectedIsocenterSetupIsocenter=False,
+                                                                     Comment="", RbeModelName=None,
+                                                                     EnableDynamicTrackingForVero=False,
+                                                                     NewDoseSpecificationPointNames=[],
+                                                                     NewDoseSpecificationPoints=[],
+                                                                     MotionSynchronizationTechniqueSettings={
+                                                                         'DisplayName': None,
+                                                                         'MotionSynchronizationSettings': None,
+                                                                         'RespiratoryIntervalTime': None,
+                                                                         'RespiratoryPhaseGatingDutyCycleTimePercentage': None,
+                                                                         'MotionSynchronizationTechniqueType': "Undefined"},
+                                                                     Custom=None, ToleranceTableLabel=None)
 
         # Sauvegarde du plan
         print('~~~~ Saving case ~~~~')
@@ -874,17 +863,6 @@ if __name__ == '__main__':
         # Le bs créé est mis en primary pour simplifier
         plan.BeamSets[bs_name].SetCurrent()
         beam_set = get_current("BeamSet")
-
-        # Optimization settings
-        plan.PlanOptimizations[0].OptimizationParameters.Algorithm.OptimalityTolerance = 1e-7
-        plan.PlanOptimizations[0].OptimizationParameters.Algorithm.MaxNumberOfIterations = 30
-        plan.PlanOptimizations[0].OptimizationParameters.DoseCalculation.ComputeFinalDose = True
-
-        # if ind = 0 = HFS la prescription est attribuée au PTV HFS, sinon au PTV FFS pour le plan FFS
-        if direction == 'HFS':
-            prescription_roi = 'PTV HFS'
-        else:
-            prescription_roi = 'PTV FFS'
 
         # Si la prescription existe déjà, ne pas la recréer
         if not beam_set.Prescription.PrescriptionDoseReferences:
@@ -916,19 +894,17 @@ if __name__ == '__main__':
         # jonction en GD
         coords_laser_rouges_HFS = (obj_patient.jonction[0], obj_patient.zero_scan, obj_patient.abdomen[2])
 
-        if direction == 'HFS':  # Plan HFS
+        if TreatmentTechnique == 'TomoHelical':  # Plan HFS
             # Le laser vert est mis en antépost au centre vertical du volume "Poumons"
-            AP_iso_HFS = obj_patient.case.PatientModel.StructureSets[obj_patient.examinations['HFS']].RoiGeometries[
-                'Poumons'].GetCenterOfRoi().y
+            AP_iso_HFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries['Poumons'].GetCenterOfRoi().y
             coords_laser_vert = (0, AP_iso_HFS, obj_patient.abdomen[2])
 
-        elif direction == 'FFS':  # Plan FFS
+        elif TreatmentTechnique == 'TomoDirect':  # Plan FFS (ou HFS pour les petits)
             # Pour le plan FFS, le laser vert est positionné en AP au centre du volume PTV ffs afin que le patient
             # soit bien centré en hauteur et n'ait pas les genoux qui dépassent du cadre. Mais attention, ne doit pas
             # dépasser 21.5 cm par rapport à la table
 
-            AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.examinations['FFS']].RoiGeometries[
-                'PTV FFS'].GetCenterOfRoi().y
+            AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries['PTV FFS'].GetCenterOfRoi().y
 
             if abs(AP_iso_FFS) > abs(obj_patient.upper_pallet) + 21:
                 AP_iso_FFS = obj_patient.upper_pallet - 21
@@ -945,10 +921,26 @@ if __name__ == '__main__':
         ########################################################
         # Création du faisceau
 
-        plan = obj_patient.case.TreatmentPlans[plan_name]
+        plan_temporaire = obj_patient.case.TreatmentPlans[plan_name]
+
+        # Lorsque l'on a deux bs dans un même plan, le premier beam_set est dans plan.PlanOptimizations[0]
+        # et le second est dans plan.PlanOptimizations[1].
+        # Pour avoir le bon objet plan, il faut donc spécifier le bon beam_set.
+
+        for indice, bs in enumerate(plan.PlanOptimizations):
+            bs_a_tester = bs.OptimizedBeamSets[0].DicomPlanLabel
+            if bs_a_tester == bs_name:
+                plan = plan_temporaire.PlanOptimizations[indice]
+                break
+
         x, y, z = coords_laser_vert
 
-        if direction == 'HFS':
+        # Optimization settings
+        plan.OptimizationParameters.Algorithm.OptimalityTolerance = 1e-7
+        plan.OptimizationParameters.Algorithm.MaxNumberOfIterations = 30
+        plan.OptimizationParameters.DoseCalculation.ComputeFinalDose = True
+
+        if TreatmentTechnique == "TomoHelical":
             try:
                 retval_0 = beam_set.CreatePhotonBeam(BeamQualityId="6", CyberKnifeCollimationType="Undefined",
                                                      CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
@@ -972,7 +964,7 @@ if __name__ == '__main__':
             pitch = 0.380
             gantry_period = 20  # impossible de mettre moins
             try:
-                plan.PlanOptimizations[0].OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
+                plan.OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
                     0].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
                                                                                    PitchTomoHelical=pitch,
                                                                                    PitchTomoDirect=None,
@@ -984,7 +976,7 @@ if __name__ == '__main__':
             except:
                 print("No changes to save.")
 
-        elif direction == 'FFS':
+        elif TreatmentTechnique == "TomoDirect":
             try:
                 beam_names = ['Ant', 'Post']
                 angles = [0, 180]
@@ -1009,7 +1001,7 @@ if __name__ == '__main__':
                 max_delivery_factor = 1.3
 
                 for num in range(len(beam_names)):
-                    plan.PlanOptimizations[0].OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
+                    plan.OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
                         num].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
                                                                                          PitchTomoHelical=None,
                                                                                          PitchTomoDirect=pitch,
@@ -1046,17 +1038,22 @@ if __name__ == '__main__':
         if direction == 'HFS':
             if not pediatrique:
                 if total_dose > 800:
-                    filename = "adultesHFS.csv"
+                    filename = "12Gy_corps.csv"
                 else:
-                    filename = "2GyHFS.csv"
+                    filename = "2Gy_corps.csv"
             else:
-                filename = "pediatrique.csv"
+                if total_dose > 800:
+                    filename = "12Gy_corps.csv"
+                else:
+                    filename = "jambes.csv"
         else:
-            filename = "adultesFFS.csv"
+            filename = "jambes.csv"
 
         csv_path = os.path.join(obj_patient.directory, filename)
         df = pd.read_csv(csv_path, sep=';')
 
+        # Création des objectifs et des contraintes dosimétriques
+        robustesse = False
         for row in df.iloc:
             FunctionType = row.FunctionType
             RoiName = row.RoiName
@@ -1065,6 +1062,9 @@ if __name__ == '__main__':
             IsRobust = row.IsRobust
             IsConstraint = row.IsConstraint
             HighDoseLevel = row.HighDoseLevel * total_dose
+
+            if IsRobust:  # Cette fonction permet d'activer la robustesse ssi un objectif est robuste
+                robustesse == True
 
             # Utilisation de la fonction set_obj_function (définie hors classe)
             set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel)
@@ -1075,23 +1075,24 @@ if __name__ == '__main__':
         ###############################################################################################################
         ###############################################################################################################
 
-        decalage = 1.5  # cm
-        plan.PlanOptimizations[0].OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=0,
-                                                                                  PositionUncertaintyPosterior=0,
-                                                                                  PositionUncertaintySuperior=0,
-                                                                                  PositionUncertaintyInferior=0,
-                                                                                  PositionUncertaintyLeft=decalage,
-                                                                                  PositionUncertaintyRight=decalage,
-                                                                                  DensityUncertainty=0,
-                                                                                  PositionUncertaintySetting="Universal",
-                                                                                  IndependentLeftRight=True,
-                                                                                  IndependentAnteriorPosterior=True,
-                                                                                  IndependentSuperiorInferior=True,
-                                                                                  ComputeExactScenarioDoses=False,
-                                                                                  NamesOfNonPlanningExaminations=[],
-                                                                                  PatientGeometryUncertaintyType="PerTreatmentCourse",
-                                                                                  PositionUncertaintyType="PerTreatmentCourse",
-                                                                                  TreatmentCourseScenariosFactor=1000)
+        if robustesse:
+            decalage = 1.5  # cm
+            plan.OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=0,
+                                                                                      PositionUncertaintyPosterior=0,
+                                                                                      PositionUncertaintySuperior=0,
+                                                                                      PositionUncertaintyInferior=0,
+                                                                                      PositionUncertaintyLeft=decalage,
+                                                                                      PositionUncertaintyRight=decalage,
+                                                                                      DensityUncertainty=0,
+                                                                                      PositionUncertaintySetting="Universal",
+                                                                                      IndependentLeftRight=True,
+                                                                                      IndependentAnteriorPosterior=True,
+                                                                                      IndependentSuperiorInferior=True,
+                                                                                      ComputeExactScenarioDoses=False,
+                                                                                      NamesOfNonPlanningExaminations=[],
+                                                                                      PatientGeometryUncertaintyType="PerTreatmentCourse",
+                                                                                      PositionUncertaintyType="PerTreatmentCourse",
+                                                                                      TreatmentCourseScenariosFactor=1000)
 
     print('~~~~ Saving case ~~~~')
     obj_patient.patient.Save()
