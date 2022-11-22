@@ -57,10 +57,10 @@ def set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, I
 
     # Création de la fonction
     plan.AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
-                                                      IsConstraint=IsConstraint,
-                                                      RestrictAllBeamsIndividually=False,
-                                                      RestrictToBeam=None, IsRobust=IsRobust,
-                                                      RestrictToBeamSet=None, UseRbeDose=False)
+                                 IsConstraint=IsConstraint,
+                                 RestrictAllBeamsIndividually=False,
+                                 RestrictToBeam=None, IsRobust=IsRobust,
+                                 RestrictToBeamSet=None, UseRbeDose=False)
 
     # Remplissage des valeurs
     # On regarde le nombre de fonctions déjà présentes. En considérant que la fonction
@@ -429,7 +429,7 @@ class Patient:
                 description = data['SeriesModule']['SeriesDescription']
                 print(exam.Name, description)
                 # On ne prend que les images reconstruites en mdd
-                if "mdd" in description.lower() or "br38" in description.lower():
+                if "mdd" in description.lower(): # or "br38" in description.lower():
                     examinations[exam.PatientPosition] = exam.Name
         self.examinations = examinations
 
@@ -525,7 +525,7 @@ if __name__ == '__main__':
         to_do = ['HFS', 'FFS']
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
-    do_it = False
+    do_it = True
 
     if do_it:
         #########################################################################
@@ -787,7 +787,7 @@ if __name__ == '__main__':
     if not pediatrique:
         PLAN_NAMES = [f"{date}_HFS", f"{date}_FFS"]
         PATIENT_POSITIONS = ["HeadFirstSupine", "FeetFirstSupine"]
-        DIRECTIONS = ['HFS','FFS']
+        DIRECTIONS = ['HFS', 'FFS']
 
     elif pediatrique:
         PLAN_NAMES = [f"{date}_HFS", f"{date}_HFS"]
@@ -799,10 +799,12 @@ if __name__ == '__main__':
     TREATMENT_TECHNIQUES = ["TomoHelical", "TomoDirect"]
     machine_name = "Radixact1"
 
-
-    for direction, plan_name, bs_name, patient_position, TreatmentTechnique, prescription_roi in zip(DIRECTIONS, PLAN_NAMES, BS_NAMES,
-                                                                                   PATIENT_POSITIONS,
-                                                                                   TREATMENT_TECHNIQUES,PRESCRIPTION_ROI):
+    for direction, plan_name, bs_name, patient_position, TreatmentTechnique, prescription_roi in zip(DIRECTIONS,
+                                                                                                     PLAN_NAMES,
+                                                                                                     BS_NAMES,
+                                                                                                     PATIENT_POSITIONS,
+                                                                                                     TREATMENT_TECHNIQUES,
+                                                                                                     PRESCRIPTION_ROI):
         print(f'----> Création du plan "{plan_name}" et du beam set "{bs_name}" ')
 
         # CT étudié en primary
@@ -896,7 +898,8 @@ if __name__ == '__main__':
 
         if TreatmentTechnique == 'TomoHelical':  # Plan HFS
             # Le laser vert est mis en antépost au centre vertical du volume "Poumons"
-            AP_iso_HFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries['Poumons'].GetCenterOfRoi().y
+            AP_iso_HFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+                'Poumons'].GetCenterOfRoi().y
             coords_laser_vert = (0, AP_iso_HFS, obj_patient.abdomen[2])
 
         elif TreatmentTechnique == 'TomoDirect':  # Plan FFS (ou HFS pour les petits)
@@ -904,7 +907,8 @@ if __name__ == '__main__':
             # soit bien centré en hauteur et n'ait pas les genoux qui dépassent du cadre. Mais attention, ne doit pas
             # dépasser 21.5 cm par rapport à la table
 
-            AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries['PTV FFS'].GetCenterOfRoi().y
+            AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+                'PTV FFS'].GetCenterOfRoi().y
 
             if abs(AP_iso_FFS) > abs(obj_patient.upper_pallet) + 21:
                 AP_iso_FFS = obj_patient.upper_pallet - 21
@@ -1078,21 +1082,21 @@ if __name__ == '__main__':
         if robustesse:
             decalage = 1.5  # cm
             plan.OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=0,
-                                                                                      PositionUncertaintyPosterior=0,
-                                                                                      PositionUncertaintySuperior=0,
-                                                                                      PositionUncertaintyInferior=0,
-                                                                                      PositionUncertaintyLeft=decalage,
-                                                                                      PositionUncertaintyRight=decalage,
-                                                                                      DensityUncertainty=0,
-                                                                                      PositionUncertaintySetting="Universal",
-                                                                                      IndependentLeftRight=True,
-                                                                                      IndependentAnteriorPosterior=True,
-                                                                                      IndependentSuperiorInferior=True,
-                                                                                      ComputeExactScenarioDoses=False,
-                                                                                      NamesOfNonPlanningExaminations=[],
-                                                                                      PatientGeometryUncertaintyType="PerTreatmentCourse",
-                                                                                      PositionUncertaintyType="PerTreatmentCourse",
-                                                                                      TreatmentCourseScenariosFactor=1000)
+                                                                 PositionUncertaintyPosterior=0,
+                                                                 PositionUncertaintySuperior=0,
+                                                                 PositionUncertaintyInferior=0,
+                                                                 PositionUncertaintyLeft=decalage,
+                                                                 PositionUncertaintyRight=decalage,
+                                                                 DensityUncertainty=0,
+                                                                 PositionUncertaintySetting="Universal",
+                                                                 IndependentLeftRight=True,
+                                                                 IndependentAnteriorPosterior=True,
+                                                                 IndependentSuperiorInferior=True,
+                                                                 ComputeExactScenarioDoses=False,
+                                                                 NamesOfNonPlanningExaminations=[],
+                                                                 PatientGeometryUncertaintyType="PerTreatmentCourse",
+                                                                 PositionUncertaintyType="PerTreatmentCourse",
+                                                                 TreatmentCourseScenariosFactor=1000)
 
     print('~~~~ Saving case ~~~~')
     obj_patient.patient.Save()
