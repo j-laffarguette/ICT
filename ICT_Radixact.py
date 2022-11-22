@@ -41,55 +41,15 @@ def has_contour(case, examination, roi_to_check):
     return case.PatientModel.StructureSets[examination].RoiGeometries[roi_to_check].HasContours()
 
 
-def set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel):
-    """
-    Cette fonction permet de créer un objectif de dose et de remplir tous les paramètres
-    :param plan: plan = get_current_plan()
-    :param FunctionType: "MaxEud" ou autres
-    :param RoiName: "nom de la roi"
-    :param DoseLevel: entre 0 et 1 -> sera multiplié par la dose totale en cGy
-    :param Weight: poids
-    :param IsRobust: True ou False
-    :param IsConstraint : True ou False
-    :param HighDoseLevel: Entre 0 et 1 -> Pour le dose fall off
-    :return:
-    """
 
-    # Création de la fonction
-    plan.AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
-                                 IsConstraint=IsConstraint,
-                                 RestrictAllBeamsIndividually=False,
-                                 RestrictToBeam=None, IsRobust=IsRobust,
-                                 RestrictToBeamSet=None, UseRbeDose=False)
 
-    # Remplissage des valeurs
-    # On regarde le nombre de fonctions déjà présentes. En considérant que la fonction
-    # venant juste d'être rentrée est la dernière. Attention, on ne cherche pas au même endroit pour les objectifs
-    # et les contraintes
 
-    if IsConstraint:
-        n_functions = len(plan.Constraints)
-        dose = plan.Constraints[n_functions - 1]
-    else:
-        n_functions = len(plan.Objective.ConstituentFunctions)
-        dose = plan.Objective.ConstituentFunctions[n_functions - 1]
 
-    if RoiName == dose.OfDoseGridRoi.OfRoiGeometry.OfRoi.Name:  # Vérification que tout va bien
-        print(RoiName)
 
-        if FunctionType == 'DoseFallOff':
-            dose.DoseFunctionParameters.HighDoseLevel = HighDoseLevel
-            dose.DoseFunctionParameters.LowDoseDistance = 0.5
-            dose.DoseFunctionParameters.AdaptToTargetDoseLevels = True
 
-        else:
-            # On attribue la dose correspondante
-            dose.DoseFunctionParameters.DoseLevel = DoseLevel
-        dose.DoseFunctionParameters.Weight = Weight  # On met un weight même aux contraintes
 
-    else:
-        raise NameError("Le nom de la function dans le CSV ne correspond pas à la fonction créée. C'est la tuile...")
-    print('-> Objectif créé !')
+
+
 
 
 def round_to_nearest_half_int(num):
@@ -122,6 +82,11 @@ class Patient:
         self.upper_pallet = None
         self.direction = 'HFS'
         self.directory = r"G:\Commun\PHYSICIENS\JL\Projets\06 - Radixact\ICT\csv_files"
+        self.beam_set = None
+        self.plan = None
+        self.fraction_dose = None
+        self.total_dose = None
+        self.number_of_fractions = None
 
         # Récupération des informations des CT (nom + scan position HFS ou FFS)
         self.examinations = self.get_ct_list()  # dictionnaire {"exam_name":"FFS/HFS", ...}
@@ -130,7 +95,208 @@ class Patient:
         self.set_primary(self.examinations['HFS'])
         self.pediatrique()
 
-    def verifications(self, total_dose):
+    def create_tomohelical_plan(self, bs_name, isocenter, pitch=None, gantry_period=None):
+
+        if gantry_period is None:
+            gantry_period = 20
+
+        if pitch is None:
+            pitch = 20
+
+        x, y, z = isocenter
+        try:
+            retval_0 = self.beam_set.CreatePhotonBeam(BeamQualityId="6", CyberKnifeCollimationType="Undefined",
+                                                 CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
+                                                 CyberKnifeAllowIncreasedPitchCorrection=None,
+                                                 IsocenterData={'Position': {'x': x, 'y': y, 'z': z},
+                                                                'NameOfIsocenterToRef': "",
+                                                                'Name': 'iso_laser_vert',
+                                                                'Color': "98, 184, 234"}, Name=bs_name,
+                                                 Description="",
+                                                 GantryAngle=0, CouchRotationAngle=0, CouchPitchAngle=0,
+                                                 CouchRollAngle=0,
+                                                 CollimatorAngle=0)
+
+            retval_0.SetBolus(BolusName="")
+            self.beam_set.BeamMU = 0
+        except:
+            # le faisceau existe déjà.
+            Exception("le faisceau existe déjà")
+
+        try:
+            self.plan.OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
+                0].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
+                                                                               PitchTomoHelical=pitch,
+                                                                               PitchTomoDirect=None,
+                                                                               BackJawPosition=2.1,
+                                                                               FrontJawPosition=-2.1,
+                                                                               MaxDeliveryTime=None,
+                                                                               MaxGantryPeriod=gantry_period,
+                                                                               MaxDeliveryTimeFactor=None)
+        except:
+            print("No changes to save.")
+
+    def create_tomodirect_plan(self, bs_name, isocenter, beam_names, angles, pitch=None, max_delivery_factor=None):
+
+        if beam_names is None:
+            beam_names = ['Ant', 'Post']
+
+        if angles is None:
+            angles = [0, 180]
+
+        if max_delivery_factor is None:
+            max_delivery_factor = 1.3
+
+        if pitch is None:
+            pitch = 0.5
+
+        x, y, z = isocenter
+
+        # Création des différents faisceaux
+        for beam_name, angle in zip(beam_names, angles):
+            # Création du faisceau antérieur
+            retval_0 = self.beam_set.CreatePhotonBeam(BeamQualityId="6", CyberKnifeCollimationType="Undefined",
+                                                      CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
+                                                      CyberKnifeAllowIncreasedPitchCorrection=None,
+                                                      IsocenterData={'Position': {'x': x, 'y': y, 'z': z},
+                                                                     'NameOfIsocenterToRef': bs_name,
+                                                                     'Name': bs_name,
+                                                                     'Color': "98, 184, 234"}, Name=beam_name,
+                                                      Description="", GantryAngle=angle, CouchRotationAngle=0,
+                                                      CouchPitchAngle=0, CouchRollAngle=0, CollimatorAngle=0)
+            # lignes obligatoires
+            retval_0.SetBolus(BolusName="")
+            self.beam_set.Beams[beam_name].BeamMU = 0
+
+        for num in range(len(beam_names)):
+            self.plan.OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
+                num].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
+                                                                                 PitchTomoHelical=None,
+                                                                                 PitchTomoDirect=pitch,
+                                                                                 BackJawPosition=2.1,
+                                                                                 FrontJawPosition=-2.1,
+                                                                                 MaxDeliveryTime=None,
+                                                                                 MaxGantryPeriod=None,
+                                                                                 MaxDeliveryTimeFactor=max_delivery_factor)
+
+    def set_prescription(self):
+        # définition de la prescription (2Gy ou 12 Gy?)
+        verif = 0
+        msg = "Entrer les informations de la prescription"
+        title = "Prescription"
+        fields = ("Nombre de fractions", "Dose totale (Gy)")
+
+        easygui = True  # mettre False pour ne pas afficher la fenêtre en mode programmation !
+
+        # Cette section permet d'afficher une fenêtre permettant d'entrer la prescription
+        # todo: remplacer par la méthode automatique de requête Mosaiq.
+        if easygui:
+            while verif != 1:
+                mes_choix = multenterbox(msg, title, fields)
+                self.number_of_fractions = int(mes_choix[0])
+                self.total_dose = float(mes_choix[1]) * 100
+                self.fraction_dose = self.total_dose / self.number_of_fractions
+
+                if self.fraction_dose != 200:
+                    msg = "Une erreur a été commise. \nVérifiez les données entrées et recommencez !"
+                else:
+                    break
+        else:
+            self.number_of_fractions = 6
+            self.total_dose = 1200
+            self.fraction_dose = 200
+
+    def create_plan(self, plan_name, bs_name, machine_name, TreatmentTechnique, patient_position,
+                    OptimalityTolerance=None, MaxNumberOfIterations=None, ComputeFinalDose=None):
+
+        if ComputeFinalDose is None:
+            ComputeFinalDose = True
+
+        if OptimalityTolerance is None:
+            OptimalityTolerance = 1e-7
+
+        if MaxNumberOfIterations is None:
+            MaxNumberOfIterations = 30
+
+        # vérification de la non-existence du plan avant création
+        list_of_plans = [plan.Name for plan in self.case.TreatmentPlans]
+        if plan_name not in list_of_plans:
+            # création du plan
+            retval_0 = obj_patient.case.AddNewPlan(PlanName=plan_name, PlannedBy="", Comment="",
+                                                   ExaminationName=self.exam_name,
+                                                   IsMedicalOncologyPlan=False, AllowDuplicateNames=False)
+
+        # vérification de la non-existence du bs avant création
+        list_of_bs = [bs.DicomPlanLabel for bs in obj_patient.case.TreatmentPlans[plan_name].BeamSets]
+
+        if bs_name not in list_of_bs:
+            # création du bs
+            obj_patient.case.TreatmentPlans[plan_name].AddNewBeamSet(Name=bs_name,
+                                                                     ExaminationName=self.exam_name,
+                                                                     MachineName=machine_name,
+                                                                     Modality="Photons",
+                                                                     TreatmentTechnique=TreatmentTechnique,
+                                                                     PatientPosition=patient_position,
+                                                                     NumberOfFractions=self.number_of_fractions,
+                                                                     CreateSetupBeams=False,
+                                                                     UseLocalizationPointAsSetupIsocenter=False,
+                                                                     UseUserSelectedIsocenterSetupIsocenter=False,
+                                                                     Comment="", RbeModelName=None,
+                                                                     EnableDynamicTrackingForVero=False,
+                                                                     NewDoseSpecificationPointNames=[],
+                                                                     NewDoseSpecificationPoints=[],
+                                                                     MotionSynchronizationTechniqueSettings={
+                                                                         'DisplayName': None,
+                                                                         'MotionSynchronizationSettings': None,
+                                                                         'RespiratoryIntervalTime': None,
+                                                                         'RespiratoryPhaseGatingDutyCycleTimePercentage': None,
+                                                                         'MotionSynchronizationTechniqueType': "Undefined"},
+                                                                     Custom=None, ToleranceTableLabel=None)
+
+        # Sauvegarde du plan
+        print('~~~~ Saving case ~~~~')
+        self.patient.Save()
+
+        # Le plan créé est mis en primary pour simplifier
+        self.case.TreatmentPlans[plan_name].SetCurrent()
+        plan = get_current('Plan')
+
+        # Le bs créé est mis en primary pour simplifier
+        plan.BeamSets[bs_name].SetCurrent()
+        beam_set = get_current("BeamSet")
+        self.beam_set = beam_set
+
+        # Si la prescription existe déjà, ne pas la recréer
+        if not beam_set.Prescription.PrescriptionDoseReferences:
+            beam_set.AddRoiPrescriptionDoseReference(RoiName=prescription_roi, DoseVolume=0,
+                                                     PrescriptionType="MedianDose",
+                                                     DoseValue=self.total_dose, RelativePrescriptionLevel=1)
+        elif not beam_set.Prescription.PrescriptionDoseReferences[0].OnStructure.Name == prescription_roi:
+            beam_set.AddRoiPrescriptionDoseReference(RoiName=prescription_roi, DoseVolume=0,
+                                                     PrescriptionType="MedianDose",
+                                                     DoseValue=self.total_dose, RelativePrescriptionLevel=1)
+
+        beam_set.SetAutoScaleToPrimaryPrescription(AutoScale=False)
+
+        plan_temporaire = obj_patient.case.TreatmentPlans[plan_name]
+
+        # Lorsque l'on a deux bs dans un même plan,1    2 le premier beam_set est dans plan.PlanOptimizations[0]
+        # et le second est dans plan.PlanOptimizations[1].
+        # Pour avoir le bon objet plan, il faut donc spécifier le bon beam_set.
+
+        for indice, bs in enumerate(plan.PlanOptimizations):
+            bs_a_tester = bs.OptimizedBeamSets[0].DicomPlanLabel
+            if bs_a_tester == bs_name:
+                plan = plan_temporaire.PlanOptimizations[indice]
+                self.plan = plan
+                break
+
+        # Optimization settings
+        self.plan.OptimizationParameters.Algorithm.OptimalityTolerance = OptimalityTolerance
+        self.plan.OptimizationParameters.Algorithm.MaxNumberOfIterations = MaxNumberOfIterations
+        self.plan.OptimizationParameters.DoseCalculation.ComputeFinalDose = ComputeFinalDose
+
+    def verifications(self):
         # ----------------------------------------------------------
         # VERIF de la table. On ne vérifie que Upper Pallet
         # Verification de la présence de la roi upper pallet
@@ -159,12 +325,12 @@ class Patient:
 
             if direction == 'HFS':
                 if not self.pediatrique:
-                    if total_dose > 800:
+                    if self.total_dose > 800:
                         filename = "12Gy_corps.csv"
                     else:
                         filename = "2Gy_corps.csv"
                 else:
-                    if total_dose > 800:
+                    if self.total_dose > 800:
                         filename = "12Gy_corps.csv"
                     else:
                         filename = "jambes.csv"
@@ -429,7 +595,7 @@ class Patient:
                 description = data['SeriesModule']['SeriesDescription']
                 print(exam.Name, description)
                 # On ne prend que les images reconstruites en mdd
-                if "mdd" in description.lower(): # or "br38" in description.lower():
+                if "mdd" in description.lower():  # or "br38" in description.lower():
                     examinations[exam.PatientPosition] = exam.Name
         self.examinations = examinations
 
@@ -468,6 +634,79 @@ class Patient:
             self.case.PatientModel.StructureSets[self.exam_name].PoiGeometries[poi_name].Point = {
                 'x': x, 'y': y, 'z': z}
 
+    def objectifs_auto_filling(self, plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel):
+        """
+        Cette fonction permet de créer un objectif de dose et de remplir tous les paramètres
+        :param plan: plan = get_current_plan()
+        :param FunctionType: "MaxEud" ou autres
+        :param RoiName: "nom de la roi"
+        :param DoseLevel: entre 0 et 1 -> sera multiplié par la dose totale en cGy
+        :param Weight: poids
+        :param IsRobust: True ou False
+        :param IsConstraint : True ou False
+        :param HighDoseLevel: Entre 0 et 1 -> Pour le dose fall off
+        :return:
+        """
+
+        # Création de la fonction
+        self.plan.AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
+                                     IsConstraint=IsConstraint,
+                                     RestrictAllBeamsIndividually=False,
+                                     RestrictToBeam=None, IsRobust=IsRobust,
+                                     RestrictToBeamSet=None, UseRbeDose=False)
+
+        # Remplissage des valeurs
+        # On regarde le nombre de fonctions déjà présentes. En considérant que la fonction
+        # venant juste d'être rentrée est la dernière. Attention, on ne cherche pas au même endroit pour les objectifs
+        # et les contraintes
+
+        if IsConstraint:
+            n_functions = len(self.plan.Constraints)
+            dose = self.plan.Constraints[n_functions - 1]
+        else:
+            n_functions = len(self.plan.Objective.ConstituentFunctions)
+            dose = self.plan.Objective.ConstituentFunctions[n_functions - 1]
+
+        if RoiName == dose.OfDoseGridRoi.OfRoiGeometry.OfRoi.Name:  # Vérification que tout va bien
+            print(RoiName)
+
+            if FunctionType == 'DoseFallOff':
+                dose.DoseFunctionParameters.HighDoseLevel = HighDoseLevel
+                dose.DoseFunctionParameters.LowDoseDistance = 0.5
+                dose.DoseFunctionParameters.AdaptToTargetDoseLevels = True
+
+            else:
+                # On attribue la dose correspondante
+                dose.DoseFunctionParameters.DoseLevel = DoseLevel
+            dose.DoseFunctionParameters.Weight = Weight  # On met un weight même aux contraintes
+
+        else:
+            raise NameError(
+                "Le nom de la function dans le CSV ne correspond pas à la fonction créée. C'est la tuile...")
+        print('-> Objectif créé !')
+
+    def create_objectives(self, filename):
+        csv_path = os.path.join(self.directory, filename)
+        df = pd.read_csv(csv_path, sep=';')
+
+        # Création des objectifs et des contraintes dosimétriques
+        robustesse = False
+        for row in df.iloc:
+            FunctionType = row.FunctionType
+            RoiName = row.RoiName
+            DoseLevel = row.DoseLevel * obj_patient.total_dose
+            Weight = row.Weight
+            IsRobust = row.IsRobust
+            IsConstraint = row.IsConstraint
+            HighDoseLevel = row.HighDoseLevel * obj_patient.total_dose
+
+            if IsRobust:  # Cette fonction permet d'activer la robustesse ssi un objectif est robuste
+                robustesse = True
+
+            # Utilisation de la fonction set_obj_function (définie hors classe)
+            self.objectifs_auto_filling(obj_patient.plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel)
+
+        return robustesse
 
 # -------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------
@@ -487,34 +726,11 @@ if __name__ == '__main__':
     print("Les fichiers csv contenant les objectifs et contraintes dosimétriques seront lus dans le répertoire :\n"
           rf"->  {obj_patient.directory}", "\n")
 
-    # définition de la prescription (2Gy ou 12 Gy?)
-    verif = 0
-    msg = "Entrer les informations de la prescription"
-    title = "Prescription"
-    fields = ("Nombre de fractions", "Dose totale (Gy)")
-
-    easygui = True  # mettre False pour ne pas afficher la fenêtre en mode programmation !
-
-    # Cette section permet d'afficher une fenêtre permettant d'entrer la prescription
-    # todo: remplacer par la méthode automatique de requête Mosaiq.
-    if easygui:
-        while verif != 1:
-            mes_choix = multenterbox(msg, title, fields)
-            number_of_fractions = int(mes_choix[0])
-            total_dose = float(mes_choix[1]) * 100
-            fraction_dose = total_dose / number_of_fractions
-
-            if fraction_dose != 200:
-                msg = "Une erreur a été commise. \nVérifiez les données entrées et recommencez !"
-            else:
-                break
-    else:
-        number_of_fractions = 6
-        total_dose = 1200
-        fraction_dose = 200
+    # Création de la prescription
+    obj_patient.set_prescription()
 
     # Vérification que tout va bien avant de lancer le script (présence de toutes les structures, des fichiers csv etc)
-    obj_patient.verifications(total_dose)
+    obj_patient.verifications()
 
     # ------------------------------------------------------------------------------------
     # On commencera d'abord sur le scanner Head First puis on travaille sur le Feet First. SI pédiatrique, on ne
@@ -525,7 +741,7 @@ if __name__ == '__main__':
         to_do = ['HFS', 'FFS']
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
-    do_it = True
+    do_it = False
 
     if do_it:
         #########################################################################
@@ -619,7 +835,7 @@ if __name__ == '__main__':
 
         # Création des ROI. Il n'existe désormais plus de différence entre les adultes et les enfants.
 
-        if total_dose > 800:  # Prescription 12 Gy
+        if obj_patient.total_dose > 800:  # Prescription 12 Gy
             ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins',
                         'opt PTV HFS']
             colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633",
@@ -738,7 +954,7 @@ if __name__ == '__main__':
                 ReduceMaxNumberOfPointsInContours=False, MaxNumberOfPoints=None, CreateCopyOfRoi=False,
                 ResolveOverlappingContours=True)
 
-            if direction == 'HFS' and total_dose > 800:
+            if direction == 'HFS' and obj_patient.total_dose > 800:
 
                 # Création PTV poumons = poumons - 1cm # seulement pour le scanner HFS!
                 obj_patient.algebra(out_roi='PTV poumons', in_roiA=["Poumons"], margeA=-1, Type="Ptv", color="Yellow")
@@ -799,6 +1015,17 @@ if __name__ == '__main__':
     TREATMENT_TECHNIQUES = ["TomoHelical", "TomoDirect"]
     machine_name = "Radixact1"
 
+    # Si la dose est inférieure ou égale à 8 Gy, on ajoute un plan test Tomodirect de test
+    # (en remplacement du tomohelical)
+    if obj_patient.total_dose <= 800:
+        PLAN_NAMES.append(f"{date}_HFS")
+        PRESCRIPTION_ROI.append('PTV HFS')
+        BS_NAMES.append("Corps_Tomodirect")
+        TREATMENT_TECHNIQUES.append("TomoDirect")
+        PATIENT_POSITIONS.append("HeadFirstSupine")
+        DIRECTIONS.append('HFS')
+
+    # Itération sur les différents plans à réaliser
     for direction, plan_name, bs_name, patient_position, TreatmentTechnique, prescription_roi in zip(DIRECTIONS,
                                                                                                      PLAN_NAMES,
                                                                                                      BS_NAMES,
@@ -813,70 +1040,15 @@ if __name__ == '__main__':
         # Attribution de l'IVDT qui va bien
         if not obj_patient.examination.EquipmentInfo.ImagingSystemReference:
             obj_patient.examination.EquipmentInfo.SetImagingSystemReference(ImagingSystemName="SIEMENS_RT_mDD")
-            print('~~~~ Saving case ~~~~')
-            obj_patient.patient.Save()
-        elif obj_patient.examination.EquipmentInfo.ImagingSystemReference.get('ImagingSystemName') == 'SIEMENS_RT_mDD':
+        elif not obj_patient.examination.EquipmentInfo.ImagingSystemReference.get(
+                'ImagingSystemName') == 'SIEMENS_RT_mDD':
             obj_patient.examination.EquipmentInfo.SetImagingSystemReference(ImagingSystemName="SIEMENS_RT_mDD")
-            print('~~~~ Saving case ~~~~')
-            obj_patient.patient.Save()
 
-        # vérification de la non-existence du plan avant création
-        list_of_plans = [plan.Name for plan in obj_patient.case.TreatmentPlans]
-        if plan_name not in list_of_plans:
-            # création du plan
-            retval_0 = obj_patient.case.AddNewPlan(PlanName=plan_name, PlannedBy="", Comment="",
-                                                   ExaminationName=obj_patient.exam_name,
-                                                   IsMedicalOncologyPlan=False, AllowDuplicateNames=False)
-
-        # vérification de la non-existence du bs avant création
-        list_of_bs = [bs.DicomPlanLabel for bs in obj_patient.case.TreatmentPlans[plan_name].BeamSets]
-        if bs_name not in list_of_bs:
-            # création du bs
-            obj_patient.case.TreatmentPlans[plan_name].AddNewBeamSet(Name=bs_name,
-                                                                     ExaminationName=obj_patient.exam_name,
-                                                                     MachineName=machine_name,
-                                                                     Modality="Photons",
-                                                                     TreatmentTechnique=TreatmentTechnique,
-                                                                     PatientPosition=patient_position,
-                                                                     NumberOfFractions=number_of_fractions,
-                                                                     CreateSetupBeams=False,
-                                                                     UseLocalizationPointAsSetupIsocenter=False,
-                                                                     UseUserSelectedIsocenterSetupIsocenter=False,
-                                                                     Comment="", RbeModelName=None,
-                                                                     EnableDynamicTrackingForVero=False,
-                                                                     NewDoseSpecificationPointNames=[],
-                                                                     NewDoseSpecificationPoints=[],
-                                                                     MotionSynchronizationTechniqueSettings={
-                                                                         'DisplayName': None,
-                                                                         'MotionSynchronizationSettings': None,
-                                                                         'RespiratoryIntervalTime': None,
-                                                                         'RespiratoryPhaseGatingDutyCycleTimePercentage': None,
-                                                                         'MotionSynchronizationTechniqueType': "Undefined"},
-                                                                     Custom=None, ToleranceTableLabel=None)
-
-        # Sauvegarde du plan
         print('~~~~ Saving case ~~~~')
         obj_patient.patient.Save()
 
-        # Le plan créé est mis en primary pour simplifier
-        obj_patient.case.TreatmentPlans[plan_name].SetCurrent()
-        plan = get_current('Plan')
-
-        # Le bs créé est mis en primary pour simplifier
-        plan.BeamSets[bs_name].SetCurrent()
-        beam_set = get_current("BeamSet")
-
-        # Si la prescription existe déjà, ne pas la recréer
-        if not beam_set.Prescription.PrescriptionDoseReferences:
-            beam_set.AddRoiPrescriptionDoseReference(RoiName=prescription_roi, DoseVolume=0,
-                                                     PrescriptionType="MedianDose",
-                                                     DoseValue=total_dose, RelativePrescriptionLevel=1)
-        elif not beam_set.Prescription.PrescriptionDoseReferences[0].OnStructure.Name == prescription_roi:
-            beam_set.AddRoiPrescriptionDoseReference(RoiName=prescription_roi, DoseVolume=0,
-                                                     PrescriptionType="MedianDose",
-                                                     DoseValue=total_dose, RelativePrescriptionLevel=1)
-
-        beam_set.SetAutoScaleToPrimaryPrescription(AutoScale=False)
+        # Création du plan
+        obj_patient.create_plan(plan_name, bs_name, machine_name, TreatmentTechnique, patient_position)
 
         ########################################################
         # définition des points de ref
@@ -896,13 +1068,15 @@ if __name__ == '__main__':
         # jonction en GD
         coords_laser_rouges_HFS = (obj_patient.jonction[0], obj_patient.zero_scan, obj_patient.abdomen[2])
 
-        if TreatmentTechnique == 'TomoHelical':  # Plan HFS
+            # Création des lasers
+
+        if 'corps' in bs_name.lower(): # Plan HFS
             # Le laser vert est mis en antépost au centre vertical du volume "Poumons"
             AP_iso_HFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
                 'Poumons'].GetCenterOfRoi().y
             coords_laser_vert = (0, AP_iso_HFS, obj_patient.abdomen[2])
 
-        elif TreatmentTechnique == 'TomoDirect':  # Plan FFS (ou HFS pour les petits)
+        elif 'jambe' in bs_name.lower():  # Plan FFS (ou HFS pour les petits)
             # Pour le plan FFS, le laser vert est positionné en AP au centre du volume PTV ffs afin que le patient
             # soit bien centré en hauteur et n'ait pas les genoux qui dépassent du cadre. Mais attention, ne doit pas
             # dépasser 21.5 cm par rapport à la table
@@ -910,6 +1084,7 @@ if __name__ == '__main__':
             AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
                 'PTV FFS'].GetCenterOfRoi().y
 
+            # si la position du centre du PTV FFS excède 21 cm de la upper pallet, on prend 21 cm
             if abs(AP_iso_FFS) > abs(obj_patient.upper_pallet) + 21:
                 AP_iso_FFS = obj_patient.upper_pallet - 21
 
@@ -925,110 +1100,37 @@ if __name__ == '__main__':
         ########################################################
         # Création du faisceau
 
-        plan_temporaire = obj_patient.case.TreatmentPlans[plan_name]
-
-        # Lorsque l'on a deux bs dans un même plan, le premier beam_set est dans plan.PlanOptimizations[0]
-        # et le second est dans plan.PlanOptimizations[1].
-        # Pour avoir le bon objet plan, il faut donc spécifier le bon beam_set.
-
-        for indice, bs in enumerate(plan.PlanOptimizations):
-            bs_a_tester = bs.OptimizedBeamSets[0].DicomPlanLabel
-            if bs_a_tester == bs_name:
-                plan = plan_temporaire.PlanOptimizations[indice]
-                break
-
-        x, y, z = coords_laser_vert
-
-        # Optimization settings
-        plan.OptimizationParameters.Algorithm.OptimalityTolerance = 1e-7
-        plan.OptimizationParameters.Algorithm.MaxNumberOfIterations = 30
-        plan.OptimizationParameters.DoseCalculation.ComputeFinalDose = True
-
         if TreatmentTechnique == "TomoHelical":
-            try:
-                retval_0 = beam_set.CreatePhotonBeam(BeamQualityId="6", CyberKnifeCollimationType="Undefined",
-                                                     CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
-                                                     CyberKnifeAllowIncreasedPitchCorrection=None,
-                                                     IsocenterData={'Position': {'x': x, 'y': y, 'z': z},
-                                                                    'NameOfIsocenterToRef': "",
-                                                                    'Name': 'iso_laser_vert',
-                                                                    'Color': "98, 184, 234"}, Name=bs_name,
-                                                     Description="",
-                                                     GantryAngle=0, CouchRotationAngle=0, CouchPitchAngle=0,
-                                                     CouchRollAngle=0,
-                                                     CollimatorAngle=0)
-
-                retval_0.SetBolus(BolusName="")
-                beam_set.BeamMU = 0
-            except:
-                # le faisceau existe déjà.
-                Exception("le faisceau existe déjà")
-
-            # modification des paramètres du faisceau
-            pitch = 0.380
-            gantry_period = 20  # impossible de mettre moins
-            try:
-                plan.OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
-                    0].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
-                                                                                   PitchTomoHelical=pitch,
-                                                                                   PitchTomoDirect=None,
-                                                                                   BackJawPosition=2.1,
-                                                                                   FrontJawPosition=-2.1,
-                                                                                   MaxDeliveryTime=None,
-                                                                                   MaxGantryPeriod=gantry_period,
-                                                                                   MaxDeliveryTimeFactor=None)
-            except:
-                print("No changes to save.")
+            # Création du plan tomo
+            obj_patient.create_tomohelical_plan(bs_name, coords_laser_vert, pitch=0.38, gantry_period=20)
 
         elif TreatmentTechnique == "TomoDirect":
             try:
-                beam_names = ['Ant', 'Post']
-                angles = [0, 180]
+                # Si la dose est inférieure ou égale à 8 Gy, on crée un pan tomodirect de test avec 4 faisceaux
+                if bs_name == "Corps_Tomodirect":
+                    beam_names = ['obl_ant_G', 'obl_post_G', 'obl_post_D', 'obl_ant_D']
+                    angles = [60, 120, 240, 300]
+                    obj_patient.create_tomodirect_plan(bs_name, coords_laser_vert, beam_names, angles)
 
-                for beam_name, angle in zip(beam_names, angles):
-                    # Création du faisceau antérieur
-                    retval_0 = beam_set.CreatePhotonBeam(BeamQualityId="6", CyberKnifeCollimationType="Undefined",
-                                                         CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
-                                                         CyberKnifeAllowIncreasedPitchCorrection=None,
-                                                         IsocenterData={'Position': {'x': x, 'y': y, 'z': z},
-                                                                        'NameOfIsocenterToRef': bs_name,
-                                                                        'Name': bs_name,
-                                                                        'Color': "98, 184, 234"}, Name=beam_name,
-                                                         Description="", GantryAngle=angle, CouchRotationAngle=0,
-                                                         CouchPitchAngle=0, CouchRollAngle=0, CollimatorAngle=0)
-                    # lignes obligatoires
-                    retval_0.SetBolus(BolusName="")
-                    beam_set.Beams[beam_name].BeamMU = 0
-
-                # Attribution du champ 5 et du pitch de 0.5
-                pitch = 0.5
-                max_delivery_factor = 1.3
-
-                for num in range(len(beam_names)):
-                    plan.OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
-                        num].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
-                                                                                         PitchTomoHelical=None,
-                                                                                         PitchTomoDirect=pitch,
-                                                                                         BackJawPosition=2.1,
-                                                                                         FrontJawPosition=-2.1,
-                                                                                         MaxDeliveryTime=None,
-                                                                                         MaxGantryPeriod=None,
-                                                                                         MaxDeliveryTimeFactor=max_delivery_factor)
+                else:
+                    # Cette ligne permet de créer le plan tomodirect normal (ant/post). Les données sont mises
+                    # par défaut
+                    obj_patient.create_tomodirect_plan(bs_name, coords_laser_vert)
 
                 # modification du point de specification de dose pour le plan FFS (sinon export impossible)
                 obj_patient.create_dsp()
                 xd, yd, zd = obj_patient.poi_DSP
-                retval_0 = beam_set.CreateDoseSpecificationPoint(Name="DSP", Coordinates={'x': xd,
+                retval_0 = obj_patient.beam_set.CreateDoseSpecificationPoint(Name="DSP", Coordinates={'x': xd,
                                                                                           'y': yd,
                                                                                           'z': zd},
                                                                  VisualizationDiameter=1)
-                for beam in beam_set.Beams:
+                for beam in obj_patient.beam_set.Beams:
                     beam.SetDoseSpecificationPoint(Name="DSP")
 
             except:
                 print("No changes to save.")
 
-        beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.5, 'y': 0.5, 'z': 0.5})
+        obj_patient.beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.5, 'y': 0.5, 'z': 0.5})
 
         ###############################################################################################################
         ###############################################################################################################
@@ -1041,37 +1143,21 @@ if __name__ == '__main__':
 
         if direction == 'HFS':
             if not pediatrique:
-                if total_dose > 800:
+                if obj_patient.total_dose > 800:
                     filename = "12Gy_corps.csv"
                 else:
                     filename = "2Gy_corps.csv"
             else:
-                if total_dose > 800:
+                if obj_patient.total_dose > 800:
                     filename = "12Gy_corps.csv"
                 else:
                     filename = "jambes.csv"
         else:
             filename = "jambes.csv"
 
-        csv_path = os.path.join(obj_patient.directory, filename)
-        df = pd.read_csv(csv_path, sep=';')
 
-        # Création des objectifs et des contraintes dosimétriques
-        robustesse = False
-        for row in df.iloc:
-            FunctionType = row.FunctionType
-            RoiName = row.RoiName
-            DoseLevel = row.DoseLevel * total_dose
-            Weight = row.Weight
-            IsRobust = row.IsRobust
-            IsConstraint = row.IsConstraint
-            HighDoseLevel = row.HighDoseLevel * total_dose
+        robustesse = obj_patient.create_objectives(filename)
 
-            if IsRobust:  # Cette fonction permet d'activer la robustesse ssi un objectif est robuste
-                robustesse == True
-
-            # Utilisation de la fonction set_obj_function (définie hors classe)
-            set_obj_function(plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel)
 
         ###############################################################################################################
         ###############################################################################################################
@@ -1081,7 +1167,7 @@ if __name__ == '__main__':
 
         if robustesse:
             decalage = 1.5  # cm
-            plan.OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=0,
+            obj_patient.plan.OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=0,
                                                                  PositionUncertaintyPosterior=0,
                                                                  PositionUncertaintySuperior=0,
                                                                  PositionUncertaintyInferior=0,
