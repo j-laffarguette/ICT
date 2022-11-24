@@ -41,17 +41,6 @@ def has_contour(case, examination, roi_to_check):
     return case.PatientModel.StructureSets[examination].RoiGeometries[roi_to_check].HasContours()
 
 
-
-
-
-
-
-
-
-
-
-
-
 def round_to_nearest_half_int(num):
     # ✅ Round number to nearest 0.5
     return round(num * 2) / 2
@@ -96,6 +85,13 @@ class Patient:
         self.pediatrique()
 
     def create_tomohelical_plan(self, bs_name, isocenter, pitch=None, gantry_period=None):
+        """
+        Cette fonction permet de créer un beam_set tomo helical
+        :param bs_name: nom donné au beam_set
+        :param isocenter: position de l'isocentre [x,y,z]
+        :param pitch: pitch compris entre 0 et 0.5 par défaut 0.38
+        :param gantry_period: par défaut 20s
+        """
 
         if gantry_period is None:
             gantry_period = 20
@@ -106,16 +102,16 @@ class Patient:
         x, y, z = isocenter
         try:
             retval_0 = self.beam_set.CreatePhotonBeam(BeamQualityId="6", CyberKnifeCollimationType="Undefined",
-                                                 CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
-                                                 CyberKnifeAllowIncreasedPitchCorrection=None,
-                                                 IsocenterData={'Position': {'x': x, 'y': y, 'z': z},
-                                                                'NameOfIsocenterToRef': "",
-                                                                'Name': 'iso_laser_vert',
-                                                                'Color': "98, 184, 234"}, Name=bs_name,
-                                                 Description="",
-                                                 GantryAngle=0, CouchRotationAngle=0, CouchPitchAngle=0,
-                                                 CouchRollAngle=0,
-                                                 CollimatorAngle=0)
+                                                      CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
+                                                      CyberKnifeAllowIncreasedPitchCorrection=None,
+                                                      IsocenterData={'Position': {'x': x, 'y': y, 'z': z},
+                                                                     'NameOfIsocenterToRef': "",
+                                                                     'Name': 'iso_laser_vert',
+                                                                     'Color': "98, 184, 234"}, Name=bs_name,
+                                                      Description="",
+                                                      GantryAngle=0, CouchRotationAngle=0, CouchPitchAngle=0,
+                                                      CouchRollAngle=0,
+                                                      CollimatorAngle=0)
 
             retval_0.SetBolus(BolusName="")
             self.beam_set.BeamMU = 0
@@ -136,8 +132,16 @@ class Patient:
         except:
             print("No changes to save.")
 
-    def create_tomodirect_plan(self, bs_name, isocenter, beam_names, angles, pitch=None, max_delivery_factor=None):
-
+    def create_tomodirect_plan(self, bs_name, isocenter, beam_names = None, angles = None, pitch=None, max_delivery_factor=None):
+        """
+        Cette fonction permet de créer un beam_set tomodirect
+        :param bs_name: nom donné au beam_set
+        :param isocenter: position de l'isocentre [x,y,z]
+        :param beam_names: nom des faisceaux ['f1','f2',...]
+        :param angles: angles en degrés [0,20,30,...]
+        :param pitch: pitch compris entre 0 et 0.5
+        :param max_delivery_factor: max factor par défaut à 1.3
+        """
         if beam_names is None:
             beam_names = ['Ant', 'Post']
 
@@ -180,6 +184,13 @@ class Patient:
                                                                                  MaxDeliveryTimeFactor=max_delivery_factor)
 
     def set_prescription(self):
+        """
+        Cette fonction permet d'entrer la prescription à l'aide d'une fenêtre easygui
+        :return:    self.number_of_fractions\n
+                    self.total_dose (en cGy)\n
+                    self.fraction_dose (en cGy)
+        """
+
         # définition de la prescription (2Gy ou 12 Gy?)
         verif = 0
         msg = "Entrer les informations de la prescription"
@@ -208,6 +219,17 @@ class Patient:
 
     def create_plan(self, plan_name, bs_name, machine_name, TreatmentTechnique, patient_position,
                     OptimalityTolerance=None, MaxNumberOfIterations=None, ComputeFinalDose=None):
+        """
+        Cette fonction permet de créer un plan
+        :param plan_name: nom du plan
+        :param bs_name: nom du beam_set
+        :param machine_name: nom de la machine (ex: 'Radixact')
+        :param TreatmentTechnique: "TomoHelical", "TomoDirect"
+        :param patient_position: "HeadFirstSupine", "FeetFirstSupine"
+        :param OptimalityTolerance: par défaut 1e-7
+        :param MaxNumberOfIterations: par défaut 30
+        :param ComputeFinalDose: par défaut True
+        """
 
         if ComputeFinalDose is None:
             ComputeFinalDose = True
@@ -634,7 +656,8 @@ class Patient:
             self.case.PatientModel.StructureSets[self.exam_name].PoiGeometries[poi_name].Point = {
                 'x': x, 'y': y, 'z': z}
 
-    def objectifs_auto_filling(self, plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel):
+    def objectifs_auto_filling(self, plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint,
+                               HighDoseLevel):
         """
         Cette fonction permet de créer un objectif de dose et de remplir tous les paramètres
         :param plan: plan = get_current_plan()
@@ -650,10 +673,10 @@ class Patient:
 
         # Création de la fonction
         self.plan.AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
-                                     IsConstraint=IsConstraint,
-                                     RestrictAllBeamsIndividually=False,
-                                     RestrictToBeam=None, IsRobust=IsRobust,
-                                     RestrictToBeamSet=None, UseRbeDose=False)
+                                          IsConstraint=IsConstraint,
+                                          RestrictAllBeamsIndividually=False,
+                                          RestrictToBeam=None, IsRobust=IsRobust,
+                                          RestrictToBeamSet=None, UseRbeDose=False)
 
         # Remplissage des valeurs
         # On regarde le nombre de fonctions déjà présentes. En considérant que la fonction
@@ -704,9 +727,11 @@ class Patient:
                 robustesse = True
 
             # Utilisation de la fonction set_obj_function (définie hors classe)
-            self.objectifs_auto_filling(obj_patient.plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint, HighDoseLevel)
+            self.objectifs_auto_filling(obj_patient.plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust,
+                                        IsConstraint, HighDoseLevel)
 
         return robustesse
+
 
 # -------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------
@@ -741,7 +766,7 @@ if __name__ == '__main__':
         to_do = ['HFS', 'FFS']
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
-    do_it = False
+    do_it = True
 
     if do_it:
         #########################################################################
@@ -1068,9 +1093,9 @@ if __name__ == '__main__':
         # jonction en GD
         coords_laser_rouges_HFS = (obj_patient.jonction[0], obj_patient.zero_scan, obj_patient.abdomen[2])
 
-            # Création des lasers
+        # Création des lasers
 
-        if 'corps' in bs_name.lower(): # Plan HFS
+        if 'corps' in bs_name.lower():  # Plan HFS
             # Le laser vert est mis en antépost au centre vertical du volume "Poumons"
             AP_iso_HFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
                 'Poumons'].GetCenterOfRoi().y
@@ -1121,9 +1146,9 @@ if __name__ == '__main__':
                 obj_patient.create_dsp()
                 xd, yd, zd = obj_patient.poi_DSP
                 retval_0 = obj_patient.beam_set.CreateDoseSpecificationPoint(Name="DSP", Coordinates={'x': xd,
-                                                                                          'y': yd,
-                                                                                          'z': zd},
-                                                                 VisualizationDiameter=1)
+                                                                                                      'y': yd,
+                                                                                                      'z': zd},
+                                                                             VisualizationDiameter=1)
                 for beam in obj_patient.beam_set.Beams:
                     beam.SetDoseSpecificationPoint(Name="DSP")
 
@@ -1155,9 +1180,7 @@ if __name__ == '__main__':
         else:
             filename = "jambes.csv"
 
-
         robustesse = obj_patient.create_objectives(filename)
-
 
         ###############################################################################################################
         ###############################################################################################################
@@ -1168,21 +1191,21 @@ if __name__ == '__main__':
         if robustesse:
             decalage = 1.5  # cm
             obj_patient.plan.OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=0,
-                                                                 PositionUncertaintyPosterior=0,
-                                                                 PositionUncertaintySuperior=0,
-                                                                 PositionUncertaintyInferior=0,
-                                                                 PositionUncertaintyLeft=decalage,
-                                                                 PositionUncertaintyRight=decalage,
-                                                                 DensityUncertainty=0,
-                                                                 PositionUncertaintySetting="Universal",
-                                                                 IndependentLeftRight=True,
-                                                                 IndependentAnteriorPosterior=True,
-                                                                 IndependentSuperiorInferior=True,
-                                                                 ComputeExactScenarioDoses=False,
-                                                                 NamesOfNonPlanningExaminations=[],
-                                                                 PatientGeometryUncertaintyType="PerTreatmentCourse",
-                                                                 PositionUncertaintyType="PerTreatmentCourse",
-                                                                 TreatmentCourseScenariosFactor=1000)
+                                                                             PositionUncertaintyPosterior=0,
+                                                                             PositionUncertaintySuperior=0,
+                                                                             PositionUncertaintyInferior=0,
+                                                                             PositionUncertaintyLeft=decalage,
+                                                                             PositionUncertaintyRight=decalage,
+                                                                             DensityUncertainty=0,
+                                                                             PositionUncertaintySetting="Universal",
+                                                                             IndependentLeftRight=True,
+                                                                             IndependentAnteriorPosterior=True,
+                                                                             IndependentSuperiorInferior=True,
+                                                                             ComputeExactScenarioDoses=False,
+                                                                             NamesOfNonPlanningExaminations=[],
+                                                                             PatientGeometryUncertaintyType="PerTreatmentCourse",
+                                                                             PositionUncertaintyType="PerTreatmentCourse",
+                                                                             TreatmentCourseScenariosFactor=1000)
 
     print('~~~~ Saving case ~~~~')
     obj_patient.patient.Save()
