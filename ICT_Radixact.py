@@ -2,6 +2,8 @@ import os, sys
 import random
 import warnings
 
+import easygui
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd
 
@@ -132,7 +134,8 @@ class Patient:
         except:
             print("No changes to save.")
 
-    def create_tomodirect_plan(self, bs_name, isocenter, beam_names = None, angles = None, pitch=None, max_delivery_factor=None):
+    def create_tomodirect_plan(self, bs_name, isocenter, beam_names=None, angles=None, pitch=None,
+                               max_delivery_factor=None):
         """
         Cette fonction permet de créer un beam_set tomodirect
         :param bs_name: nom donné au beam_set
@@ -632,10 +635,13 @@ class Patient:
         """Méthode utilisée pour créer des volumes de type PTV
         Si on ne donne pas de couleur, celle-ci est prise aléatoirement"""
 
-        if color is None:
-            color = ["#" + ''.join([random.choice('ABCDEF0123456789') for i in range(6)])][0]
+        if not check_roi(self.case, roi_name):
+            if color is None:
+                color = ["#" + ''.join([random.choice('ABCDEF0123456789') for i in range(6)])][0]
 
-        self.case.PatientModel.CreateRoi(Name=roi_name, Color=color, Type=roi_type)
+            self.case.PatientModel.CreateRoi(Name=roi_name, Color=color, Type=roi_type)
+        else:
+            print(f'{roi_name} existe déjà!')
 
     def create_poi(self, poi_name, coords, color="128, 128, 255"):
         """Méthode utilisée pour créer des points (exemple: laser rouge et laser vert). Si le point n'est pas présent
@@ -732,6 +738,28 @@ class Patient:
 
         return robustesse
 
+    def create_field_of_view(self, roi_name="Field-of-view"):
+
+        self.create_roi(roi_name=roi_name, color="Red", roi_type="FieldOfView")
+        self.case.PatientModel.RegionsOfInterest[roi_name].CreateFieldOfViewROI(ExaminationName=self.exam_name)
+
+    def create_bloc_table(self, roi_name="Bloc table"):
+
+        epaisseur = 35
+
+        # récupération du centre du volume mousse
+        y = self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries['Mousse'].GetBoundingBox()[0].y
+        y = y + epaisseur / 2
+        z = self.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries['Mousse'].GetCenterOfRoi().z
+
+        self.create_roi(roi_name=roi_name, color="Orange", roi_type="Organ")
+
+        self.case.PatientModel.RegionsOfInterest[roi_name].CreateBoxGeometry(Size={'x': 100, 'y': epaisseur, 'z': 200},
+                                                                             Examination=self.examination,
+                                                                             Center={'x': 0, 'y': y, 'z': z},
+                                                                             Representation="TriangleMesh",
+                                                                             VoxelSize=None)
+
 
 # -------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------
@@ -777,83 +805,94 @@ if __name__ == '__main__':
 
         if not pediatrique:
             # Première partie, réalisation du recalage rigide
-            # Suppression pure et simple de tous les FOR registration déjà existants
+            # On ne fait cette étape que si aucun recalage n'existe. Si un recalage existe, on demande à l'utilisateur
+            # s'il souhaite le refaire.
 
-            for reg in obj_patient.case.Registrations:
-                FFOR = reg.FromFrameOfReference
-                RFOR = reg.ToFrameOfReference
-                obj_patient.case.RemoveFrameOfReferenceRegistration(
-                    FloatingFrameOfReference=FFOR,
-                    ReferenceFrameOfReference=RFOR)
-                print('-> Un recalage a été supprimé')
+            if (obj_patient.case.Registrations.Count == 0) or \
+                    (obj_patient.case.Registrations.Count != 0 and
+                     easygui.buttonbox('Un recalage existe déjà, le conserver?', choices=["Oui", "Non"]) == "Non"):
 
-            # Création du recalage entre le scanner FFS et le scanner HFS
-            # 1. création du for reg
-            print(f'Recalage rigide entre {obj_patient.examinations["HFS"]} et {obj_patient.examinations["FFS"]}')
-            obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
-                FromExaminationName=obj_patient.examinations['HFS'], ToExaminationName=obj_patient.examinations['FFS'],
-                RegistrationName="HFS to FFS", Description=None)
+                # Suppression pure et simple de tous les FOR registration déjà existants
+                for reg in obj_patient.case.Registrations:
+                    FFOR = reg.FromFrameOfReference
+                    RFOR = reg.ToFrameOfReference
+                    obj_patient.case.RemoveFrameOfReferenceRegistration(
+                        FloatingFrameOfReference=FFOR,
+                        ReferenceFrameOfReference=RFOR)
+                    print('-> Un recalage a été supprimé')
 
-            # recalage automatique
-            obj_patient.case.ComputeGrayLevelBasedRigidRegistration(
-                FloatingExaminationName=obj_patient.examinations['HFS'],
-                ReferenceExaminationName=obj_patient.examinations[
-                    'FFS'],
-                UseOnlyTranslations=True, HighWeightOnBones=True,
-                InitializeImages=True, FocusRoisNames=[],
-                RegistrationName=None)
-            print("-> Ok!")
+                # Création du recalage entre le scanner FFS et le scanner HFS
+                # 1. création du for reg
+                print(f'Recalage rigide entre {obj_patient.examinations["HFS"]} et {obj_patient.examinations["FFS"]}')
+                obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
+                    FromExaminationName=obj_patient.examinations['HFS'],
+                    ToExaminationName=obj_patient.examinations['FFS'],
+                    RegistrationName="HFS to FFS", Description=None)
 
-            # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity
-            # avec la vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
-            print(f"Copie de la structure Vessie d'un scanner à l'autre ...")
-            obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
+                # recalage automatique
+                obj_patient.case.ComputeGrayLevelBasedRigidRegistration(
+                    FloatingExaminationName=obj_patient.examinations['HFS'],
+                    ReferenceExaminationName=obj_patient.examinations[
+                        'FFS'],
+                    UseOnlyTranslations=True, HighWeightOnBones=True,
+                    InitializeImages=True, FocusRoisNames=[],
+                    RegistrationName=None)
+                print("-> Ok!")
+
+                # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity
+                # avec la vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
+                print(f"Copie de la structure Vessie d'un scanner à l'autre ...")
+                obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
+                                                                TargetExaminationNames=[
+                                                                    obj_patient.examinations['FFS']],
+                                                                RoiNames=["Vessie"], ImageRegistrationNames=[],
+                                                                TargetExaminationNamesToSkipAddedReg=[
+                                                                    obj_patient.examinations['FFS']])
+
+                # Création du recalage élastique rigide
+                print(
+                    f"Réalisation d'un recalage élastique (rigide, basé sur la vessie comme structure de contrôle) ...")
+                reg_name = "elastique rigide"
+                obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
+                                                                                      ReferenceExaminationName=
+                                                                                      obj_patient.examinations['HFS'],
+                                                                                      TargetExaminationNames=[
+                                                                                          obj_patient.examinations[
+                                                                                              "FFS"]],
+                                                                                      ControllingRoiNames=["Vessie"],
+                                                                                      ControllingPoiNames=[],
+                                                                                      FocusRoiNames=[],
+                                                                                      AlgorithmSettings={
+                                                                                          'NumberOfResolutionLevels': 1,
+                                                                                          'InitialResolution': {
+                                                                                              'x': 0.5,
+                                                                                              'y': 0.5,
+                                                                                              'z': 0.5},
+                                                                                          'FinalResolution': {'x': 0.25,
+                                                                                                              'y': 0.25,
+                                                                                                              'z': 0.5},
+                                                                                          'InitialGaussianSmoothingSigma': 2,
+                                                                                          'FinalGaussianSmoothingSigma': 0.333333333333333,
+                                                                                          'InitialGridRegularizationWeight': 400,
+                                                                                          'FinalGridRegularizationWeight': 400,
+                                                                                          'ControllingRoiWeight': 0.5,
+                                                                                          'ControllingPoiWeight': 0.1,
+                                                                                          'MaxNumberOfIterationsPerResolutionLevel': 1000,
+                                                                                          'ImageSimilarityMeasure': "None",
+                                                                                          'DeformationStrategy': "Default",
+                                                                                          'ConvergenceTolerance': 1E-05})
+                print("-> Ok!")
+
+                # mapping des POI d'un scanner vers l'autre
+                print("Mapping des points jonction et abdo...")
+                pois = ["jonction", obj_patient.poi_abdo]
+
+                obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
+                                                            CreateNewPois=False,
+                                                            StructureRegistrationGroupNames=[reg_name],
+                                                            ReferenceExaminationNames=[obj_patient.examinations['HFS']],
                                                             TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                            RoiNames=["Vessie"], ImageRegistrationNames=[],
-                                                            TargetExaminationNamesToSkipAddedReg=[
-                                                                obj_patient.examinations['FFS']])
-
-            # Création du recalage élastique rigide
-            print(f"Réalisation d'un recalage élastique (rigide, basé sur la vessie comme structure de contrôle) ...")
-            reg_name = "elastique rigide"
-            obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
-                                                                                  ReferenceExaminationName=
-                                                                                  obj_patient.examinations['HFS'],
-                                                                                  TargetExaminationNames=[
-                                                                                      obj_patient.examinations["FFS"]],
-                                                                                  ControllingRoiNames=["Vessie"],
-                                                                                  ControllingPoiNames=[],
-                                                                                  FocusRoiNames=[],
-                                                                                  AlgorithmSettings={
-                                                                                      'NumberOfResolutionLevels': 1,
-                                                                                      'InitialResolution': {'x': 0.5,
-                                                                                                            'y': 0.5,
-                                                                                                            'z': 0.5},
-                                                                                      'FinalResolution': {'x': 0.25,
-                                                                                                          'y': 0.25,
-                                                                                                          'z': 0.5},
-                                                                                      'InitialGaussianSmoothingSigma': 2,
-                                                                                      'FinalGaussianSmoothingSigma': 0.333333333333333,
-                                                                                      'InitialGridRegularizationWeight': 400,
-                                                                                      'FinalGridRegularizationWeight': 400,
-                                                                                      'ControllingRoiWeight': 0.5,
-                                                                                      'ControllingPoiWeight': 0.1,
-                                                                                      'MaxNumberOfIterationsPerResolutionLevel': 1000,
-                                                                                      'ImageSimilarityMeasure': "None",
-                                                                                      'DeformationStrategy': "Default",
-                                                                                      'ConvergenceTolerance': 1E-05})
-            print("-> Ok!")
-
-            # mapping des POI d'un scanner vers l'autre
-            print("Mapping des points jonction et abdo...")
-            pois = ["jonction", obj_patient.poi_abdo]
-
-            obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
-                                                        CreateNewPois=False,
-                                                        StructureRegistrationGroupNames=[reg_name],
-                                                        ReferenceExaminationNames=[obj_patient.examinations['HFS']],
-                                                        TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                        ReverseMapping=False, AbortWhenBadDisplacementField=False)
+                                                            ReverseMapping=False, AbortWhenBadDisplacementField=False)
 
         # Travail sur les volumes
         print("\nTravail sur les ROI...")
@@ -1006,14 +1045,38 @@ if __name__ == '__main__':
                 # opt PTV HFS = PTV HFS - Poumons - Reins
                 obj_patient.algebra(out_roi='opt PTV HFS', in_roiA=["PTV HFS"], in_roiB=["Poumons", 'Reins'],
                                     ResultOperation="Subtraction", derive=False)
+
             else:
+                for roi in ['PTV poumons', 'PTV reins', 'Reins']:
+                    try:
+                        # Supprimer la dérivation
+                        obj_patient.case.PatientModel.RegionsOfInterest[roi].DeleteExpression()
+                    except:
+                        print(f"Impossible de supprimer la dérivation de la ROI {roi}")
+
+            # Gestion du contour externe
+            if direction == 'HFS':
+                obj_patient.algebra('External_dosi', [obj_patient.external_name], derive=False)
+            elif direction == 'FFS':
+                # Création du field of view qui servira d'externe pour le plan pieds
+                fov_name = 'Field-of-view'
+                obj_patient.create_field_of_view(roi_name=fov_name)
+                obj_patient.algebra('External_dosi', [fov_name])
+
+                # Création du bloc table que l'on retirera au fov
+                bloc_table = 'bloc_table'
+                obj_patient.create_bloc_table(roi_name=bloc_table)
+
+                # fov - bloc table = fov
+                obj_patient.algebra('External_dosi', [fov_name], [bloc_table], ResultOperation="Subtraction",
+                                    derive=False)
+
                 try:
-                    # Supprimer la dérivation
-                    obj_patient.case.PatientModel.RegionsOfInterest['PTV poumons'].DeleteExpression()
-                    obj_patient.case.PatientModel.RegionsOfInterest['PTV reins'].DeleteExpression()
-                    obj_patient.case.PatientModel.RegionsOfInterest['Reins'].DeleteExpression()
+                    obj_patient.case.PatientModel.RegionsOfInterest['External_dosi'].DeleteExpression()
                 except:
-                    print("Impossible de supprimer la dérivation")
+                    print(f"Impossible de supprimer la dérivation de la ROI 'External_dosi'")
+
+    obj_patient.case.PatientModel.RegionsOfInterest['External_dosi'].SetAsExternal()
 
     #########################################################################
     #########################################################################
@@ -1043,7 +1106,7 @@ if __name__ == '__main__':
     # Si la dose est inférieure ou égale à 8 Gy, on ajoute un plan test Tomodirect de test
     # (en remplacement du tomohelical)
     if obj_patient.total_dose <= 800:
-        PLAN_NAMES.append(f"{date}_HFS")
+        PLAN_NAMES.append(f"{date}_HFS_TD")
         PRESCRIPTION_ROI.append('PTV HFS')
         BS_NAMES.append("Corps_Tomodirect")
         TREATMENT_TECHNIQUES.append("TomoDirect")
@@ -1155,7 +1218,7 @@ if __name__ == '__main__':
             except:
                 print("No changes to save.")
 
-        obj_patient.beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.5, 'y': 0.5, 'z': 0.5})
+        obj_patient.beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.3, 'y': 0.5, 'z': 0.3})
 
         ###############################################################################################################
         ###############################################################################################################
