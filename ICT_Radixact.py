@@ -146,13 +146,13 @@ class Patient:
         :param max_delivery_factor: max factor par défaut à 1.3
         """
         if beam_names is None:
-            beam_names = ['Ant', 'Post']
+            beam_names = ['Ant', 'Post', 'Lat G', 'Lat D']
 
         if angles is None:
-            angles = [0, 180]
+            angles = [0, 180, 270, 90]
 
         if max_delivery_factor is None:
-            max_delivery_factor = 1.3
+            max_delivery_factor = 1.4
 
         if pitch is None:
             pitch = 0.5
@@ -736,7 +736,45 @@ class Patient:
             self.objectifs_auto_filling(obj_patient.plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust,
                                         IsConstraint, HighDoseLevel)
 
-        return robustesse
+        # si au moins une case est robuste dans le fichier csv, on active la robustesse
+        if robustesse:
+            self.robustesse()
+
+    def robustesse(self, ant=None, post=None, g=None, d=None):
+        """ Activation de la fonction robustesse avec les valeurs souahitées. Pour modifier les valeurs,
+        entrer la valeur souhaitée en cm"""
+
+        if ant is None:
+            ant = 1.5
+
+        if post is None:
+            post = 1.5
+
+        if g is None:
+            g = 1.5
+
+        if d is None:
+            d = 1.5
+
+        self.plan.OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=ant,
+                                                                  PositionUncertaintyPosterior=post,
+                                                                  PositionUncertaintySuperior=0,
+                                                                  PositionUncertaintyInferior=0,
+                                                                  PositionUncertaintyLeft=g,
+                                                                  PositionUncertaintyRight=d,
+                                                                  DensityUncertainty=0,
+                                                                  PositionUncertaintySetting="Universal",
+                                                                  IndependentLeftRight=True,
+                                                                  IndependentAnteriorPosterior=True,
+                                                                  IndependentSuperiorInferior=True,
+                                                                  ComputeExactScenarioDoses=False,
+                                                                  NamesOfNonPlanningExaminations=[],
+                                                                  PatientGeometryUncertaintyType="PerTreatmentCourse",
+                                                                  PositionUncertaintyType="PerTreatmentCourse",
+                                                                  TreatmentCourseScenariosFactor=1000)
+
+        print('~~~~ Saving case ~~~~')
+        self.patient.Save()
 
     def create_field_of_view(self, roi_name="Field-of-view"):
 
@@ -749,7 +787,10 @@ class Patient:
 
         # récupération du centre du volume mousse
         y = self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries['Mousse'].GetBoundingBox()[0].y
-        y = y + epaisseur / 2
+        y = (y + epaisseur / 2) - 0.1  # Le point correspond au centre de la boite créée. Pour que le haut de la
+        # boite soit alignée avec la table, il faut descendre la boite de la moitié de son épaisseur. On ajoute
+        # finalement un millimètre pour l'incertitude.
+
         z = self.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries['Mousse'].GetCenterOfRoi().z
 
         self.create_roi(roi_name=roi_name, color="Orange", roi_type="Organ")
@@ -795,6 +836,10 @@ if __name__ == '__main__':
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
     do_it = True
+    if has_contour(obj_patient.case, obj_patient.examinations['FFS'], 'PTV FFS'):
+        if easygui.buttonbox('Les structures semblent avoir déjà été créées, recommencer à zéro?',
+                             choices=["Oui", "Non"]) == "Non":
+            do_it = False
 
     if do_it:
         #########################################################################
@@ -1114,6 +1159,7 @@ if __name__ == '__main__':
         DIRECTIONS.append('HFS')
 
     # Itération sur les différents plans à réaliser
+    iteration = 0
     for direction, plan_name, bs_name, patient_position, TreatmentTechnique, prescription_roi in zip(DIRECTIONS,
                                                                                                      PLAN_NAMES,
                                                                                                      BS_NAMES,
@@ -1147,8 +1193,9 @@ if __name__ == '__main__':
         # Il est situé en ant/post sur les billes cranes = zero scan = table height (voir __init__ de Patient())
 
         # modification du type de tous les points en Undefined au cazou
-        for poi in obj_patient.case.PatientModel.PointsOfInterest:
-            poi.Type = 'Undefined'
+        if iteration > 0:
+            for poi in obj_patient.case.PatientModel.PointsOfInterest:
+                poi.Type = 'Undefined'
 
         laser_rouge_HFS = "laser rouge"
 
@@ -1230,45 +1277,27 @@ if __name__ == '__main__':
         # pandas
 
         if direction == 'HFS':
+
             if not pediatrique:
                 if obj_patient.total_dose > 800:
                     filename = "12Gy_corps.csv"
                 else:
-                    filename = "2Gy_corps.csv"
-            else:
+                    if TreatmentTechnique == 'TomoHelical':
+                        filename = "2Gy_corps.csv"
+
+                    elif TreatmentTechnique == 'TomoDirect':
+                        filename = "2Gy_corps_robuste.csv"
+            elif pediatrique:
+
                 if obj_patient.total_dose > 800:
-                    filename = "12Gy_corps.csv"
+                    filename = "12Gy_pedia.csv"
                 else:
-                    filename = "jambes.csv"
+                    filename = "2Gy_pedia"
         else:
             filename = "jambes.csv"
 
-        robustesse = obj_patient.create_objectives(filename)
+        obj_patient.create_objectives(filename)
 
-        ###############################################################################################################
-        ###############################################################################################################
-        ############################################   Robustess        ###############################################
-        ###############################################################################################################
-        ###############################################################################################################
-
-        if robustesse:
-            decalage = 1.5  # cm
-            obj_patient.plan.OptimizationParameters.SaveRobustnessParameters(PositionUncertaintyAnterior=0,
-                                                                             PositionUncertaintyPosterior=0,
-                                                                             PositionUncertaintySuperior=0,
-                                                                             PositionUncertaintyInferior=0,
-                                                                             PositionUncertaintyLeft=decalage,
-                                                                             PositionUncertaintyRight=decalage,
-                                                                             DensityUncertainty=0,
-                                                                             PositionUncertaintySetting="Universal",
-                                                                             IndependentLeftRight=True,
-                                                                             IndependentAnteriorPosterior=True,
-                                                                             IndependentSuperiorInferior=True,
-                                                                             ComputeExactScenarioDoses=False,
-                                                                             NamesOfNonPlanningExaminations=[],
-                                                                             PatientGeometryUncertaintyType="PerTreatmentCourse",
-                                                                             PositionUncertaintyType="PerTreatmentCourse",
-                                                                             TreatmentCourseScenariosFactor=1000)
-
+    iteration += 1
     print('~~~~ Saving case ~~~~')
     obj_patient.patient.Save()
