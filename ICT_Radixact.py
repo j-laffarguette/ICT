@@ -1,7 +1,8 @@
+import math
 import os, sys
 import random
 import warnings
-
+from statistics import mean
 import easygui
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -46,6 +47,68 @@ def has_contour(case, examination, roi_to_check):
 def round_to_nearest_half_int(num):
     # ✅ Round number to nearest 0.5
     return round(num * 2) / 2
+
+
+def recalage_elastique(direction, mapping=None):
+    # Définition des exam ref et target
+    if direction == 'HFS':
+        ref = obj_patient.examinations['HFS']
+        target = obj_patient.examinations["FFS"]
+    elif direction == 'FFS':
+        ref = obj_patient.examinations['FFS']
+        target = obj_patient.examinations["HFS"]
+    else:
+        raise NameError("La direction doit être 'HFS' ou 'FFS'")
+
+    # Définition du nom du recalage
+    reg_name = 'elastique_' + direction
+
+    # Activation ou pas du mapping des points
+    if mapping is None:
+        mapping = True
+
+    print(f"Réalisation d'un recalage élastique (rigide, basé sur la vessie comme structure de contrôle) ...")
+    print(f"-> ref =  {ref}, target = {target} ")
+
+    obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
+                                                                          ReferenceExaminationName=
+                                                                          ref,
+                                                                          TargetExaminationNames=[
+                                                                              target],
+                                                                          ControllingRoiNames=["Vessie"],
+                                                                          ControllingPoiNames=[],
+                                                                          FocusRoiNames=[],
+                                                                          AlgorithmSettings={
+                                                                              'NumberOfResolutionLevels': 1,
+                                                                              'InitialResolution': {'x': 0.5,
+                                                                                                    'y': 0.5,
+                                                                                                    'z': 0.5},
+                                                                              'FinalResolution': {'x': 0.25,
+                                                                                                  'y': 0.25,
+                                                                                                  'z': 0.5},
+                                                                              'InitialGaussianSmoothingSigma': 2,
+                                                                              'FinalGaussianSmoothingSigma': 0.333333333333333,
+                                                                              'InitialGridRegularizationWeight': 400,
+                                                                              'FinalGridRegularizationWeight': 400,
+                                                                              'ControllingRoiWeight': 0.5,
+                                                                              'ControllingPoiWeight': 0.1,
+                                                                              'MaxNumberOfIterationsPerResolutionLevel': 1000,
+                                                                              'ImageSimilarityMeasure': "None",
+                                                                              'DeformationStrategy': "Default",
+                                                                              'ConvergenceTolerance': 1E-05})
+    print("-> Ok!")
+
+    if mapping:
+        # mapping des POI d'un scanner vers l'autre
+        print("Mapping des points jonction et abdo...")
+        pois = ["jonction", obj_patient.poi_abdo]
+
+        obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
+                                                    CreateNewPois=False,
+                                                    StructureRegistrationGroupNames=[reg_name],
+                                                    ReferenceExaminationNames=[ref],
+                                                    TargetExaminationNames=[target],
+                                                    ReverseMapping=False, AbortWhenBadDisplacementField=False)
 
 
 # -------------------------------------------------------------------------------------------------------------
@@ -348,22 +411,12 @@ class Patient:
             # -------------------------------------------------------------------------------
             # verification de la presence des fichiers
 
-            if direction == 'HFS':
-                if not self.pediatrique:
-                    if self.total_dose > 800:
-                        filename = "12Gy_corps.csv"
-                    else:
-                        filename = "2Gy_corps.csv"
-                else:
-                    if self.total_dose > 800:
-                        filename = "12Gy_corps.csv"
-                    else:
-                        filename = "jambes.csv"
-            else:
-                filename = "jambes.csv"
+            filenames = ["12Gy_corps.csv", "2Gy_corps.csv", "2Gy_corps_robuste.csv",
+                         "12Gy_pedia.csv", "2Gy_pedia.csv", "jambes.csv"]
 
-            if not os.path.isfile(os.path.join(self.directory, filename)):
-                raise NameError(f'Fichier {filename} absent !')
+            for filename in filenames:
+                if not os.path.isfile(os.path.join(self.directory, filename)):
+                    raise NameError(f'Fichier {filename} absent !')
 
     def pediatrique(self):
         # S'il n'y a qu'un scanner HFS et que le contour externe mesure moins de 130cm, on peut faire un seul plan
@@ -801,6 +854,44 @@ class Patient:
                                                                              Representation="TriangleMesh",
                                                                              VoxelSize=None)
 
+    def create_fov_box(self, roi_name=None, retraction=None):
+
+        if retraction is None:
+            retraction = 1  # cm
+
+        if roi_name is None:
+            roi_name = 'fov_box'
+
+        # coordonnées de la boite
+        coords = self.examination.Series[0].ImageStack.GetBoundingBox()
+
+        x0, x1 = [coord.x for coord in coords]
+        y0, y1 = [coord.y for coord in coords]
+        z0, z1 = [coord.z for coord in coords]
+
+        # distance séparant les points
+        dx = (x1 - x0) - retraction
+        dy = (y1 - y0) - retraction
+        dz = (z1 - z0)
+
+        # milieu
+        cx = mean([x0, x1])
+        cy = mean([y0, y1])
+        cz = mean([z0, z1])
+
+        # Création du volume box
+        if not check_roi(self.case, roi_name):
+            retval_0 = self.case.PatientModel.CreateRoi(Name=roi_name, Color="SaddleBrown", Type="Organ",
+                                                        TissueName=None,
+                                                        RbeCellTypeName=None, RoiMaterial=None)
+
+        self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries[roi_name].OfRoi.CreateBoxGeometry(
+            Size={'x': dx, 'y': dy, 'z': dz}, Examination=self.examination,
+            Center={'x': cx, 'y': cy, 'z': cz},
+            Representation="TriangleMesh", VoxelSize=None)
+
+        # CompositeAction ends
+
 
 # -------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------
@@ -836,7 +927,7 @@ if __name__ == '__main__':
 
     # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
     do_it = True
-    if has_contour(obj_patient.case, obj_patient.examinations['FFS'], 'PTV FFS'):
+    if check_roi(obj_patient.case, 'PTV FFS'):
         if easygui.buttonbox('Les structures semblent avoir déjà été créées, recommencer à zéro?',
                              choices=["Oui", "Non"]) == "Non":
             do_it = False
@@ -894,50 +985,13 @@ if __name__ == '__main__':
                                                                 TargetExaminationNamesToSkipAddedReg=[
                                                                     obj_patient.examinations['FFS']])
 
-                # Création du recalage élastique rigide
-                print(
-                    f"Réalisation d'un recalage élastique (rigide, basé sur la vessie comme structure de contrôle) ...")
-                reg_name = "elastique rigide"
-                obj_patient.case.PatientModel.CreateHybridDeformableRegistrationGroup(RegistrationGroupName=reg_name,
-                                                                                      ReferenceExaminationName=
-                                                                                      obj_patient.examinations['HFS'],
-                                                                                      TargetExaminationNames=[
-                                                                                          obj_patient.examinations[
-                                                                                              "FFS"]],
-                                                                                      ControllingRoiNames=["Vessie"],
-                                                                                      ControllingPoiNames=[],
-                                                                                      FocusRoiNames=[],
-                                                                                      AlgorithmSettings={
-                                                                                          'NumberOfResolutionLevels': 1,
-                                                                                          'InitialResolution': {
-                                                                                              'x': 0.5,
-                                                                                              'y': 0.5,
-                                                                                              'z': 0.5},
-                                                                                          'FinalResolution': {'x': 0.25,
-                                                                                                              'y': 0.25,
-                                                                                                              'z': 0.5},
-                                                                                          'InitialGaussianSmoothingSigma': 2,
-                                                                                          'FinalGaussianSmoothingSigma': 0.333333333333333,
-                                                                                          'InitialGridRegularizationWeight': 400,
-                                                                                          'FinalGridRegularizationWeight': 400,
-                                                                                          'ControllingRoiWeight': 0.5,
-                                                                                          'ControllingPoiWeight': 0.1,
-                                                                                          'MaxNumberOfIterationsPerResolutionLevel': 1000,
-                                                                                          'ImageSimilarityMeasure': "None",
-                                                                                          'DeformationStrategy': "Default",
-                                                                                          'ConvergenceTolerance': 1E-05})
-                print("-> Ok!")
-
-                # mapping des POI d'un scanner vers l'autre
-                print("Mapping des points jonction et abdo...")
-                pois = ["jonction", obj_patient.poi_abdo]
-
-                obj_patient.case.MapPoiGeometriesDeformably(PoiGeometryNames=pois,
-                                                            CreateNewPois=False,
-                                                            StructureRegistrationGroupNames=[reg_name],
-                                                            ReferenceExaminationNames=[obj_patient.examinations['HFS']],
-                                                            TargetExaminationNames=[obj_patient.examinations['FFS']],
-                                                            ReverseMapping=False, AbortWhenBadDisplacementField=False)
+                # Création du recalage élastique rigide. On le fait dans les deux sens pour simplifier le moment où on
+                # déforme et tout et tout. La fonction réalise le mapping des POI d'un scanner vers l'autre
+                for direction in ['HFS', 'FFS']:
+                    if direction == "HFS":
+                        recalage_elastique(direction, mapping=True)
+                    else:
+                        recalage_elastique(direction, mapping=False)
 
         # Travail sur les volumes
         print("\nTravail sur les ROI...")
@@ -946,9 +1000,9 @@ if __name__ == '__main__':
 
         if obj_patient.total_dose > 800:  # Prescription 12 Gy
             ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins',
-                        'opt PTV HFS']
+                        'opt PTV HFS', 'PTV background']
             colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633",
-                      '#696100']
+                      '#696100', '#0000FF']
 
         else:  # Prescriptions 2 ou 8 Gy. On n'a plus besoin d'OAR car la dose est inférieure ou égale
             # aux contraintes
@@ -1050,18 +1104,12 @@ if __name__ == '__main__':
                 source = "PTV HFS"
                 OAR_name = "opt_jonction"
 
+                # Création du volume PTV backgroung
+                obj_patient.algebra('PTV background', ['PTV_1', 'PTV_2', 'PTV_3', 'PTV_4', 'PTV FFS'], Type='Ptv')
+
             # Création du volume
             obj_patient.algebra(out_roi=OAR_name, in_roiA=[source], color='Magenta', Type="Organ")
             obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].DeleteExpression()
-
-            # simplification des volumes pour éviter overlaps
-            roi_list = [roi.Name for roi in obj_patient.case.PatientModel.RegionsOfInterest if roi.Type == "Support"]
-
-            obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].SimplifyContours(
-                RoiNames=roi_list,
-                RemoveHoles3D=False, RemoveSmallContours=False, AreaThreshold=None,
-                ReduceMaxNumberOfPointsInContours=False, MaxNumberOfPoints=None, CreateCopyOfRoi=False,
-                ResolveOverlappingContours=True)
 
             if direction == 'HFS' and obj_patient.total_dose > 800:
 
@@ -1092,7 +1140,7 @@ if __name__ == '__main__':
                                     ResultOperation="Subtraction", derive=False)
 
             else:
-                for roi in ['PTV poumons', 'PTV reins', 'Reins']:
+                for roi in ['PTV poumons', 'PTV reins', 'Reins', 'PTV background']:
                     try:
                         # Supprimer la dérivation
                         obj_patient.case.PatientModel.RegionsOfInterest[roi].DeleteExpression()
@@ -1103,6 +1151,10 @@ if __name__ == '__main__':
             if direction == 'HFS':
                 obj_patient.algebra('External_dosi', [obj_patient.external_name], derive=False)
             elif direction == 'FFS':
+                # Création du volume contenant tout le champ de vue
+                image_fov_name = 'fov_box'
+                obj_patient.create_fov_box(roi_name=image_fov_name, retraction=2)
+
                 # Création du field of view qui servira d'externe pour le plan pieds
                 fov_name = 'Field-of-view'
                 obj_patient.create_field_of_view(roi_name=fov_name)
@@ -1114,6 +1166,11 @@ if __name__ == '__main__':
 
                 # fov - bloc table = fov
                 obj_patient.algebra('External_dosi', [fov_name], [bloc_table], ResultOperation="Subtraction",
+                                    derive=False)
+
+                # fov = fov intersect image_fov_name
+                obj_patient.algebra('External_dosi', ['External_dosi'], [image_fov_name],
+                                    ResultOperation="Intersection",
                                     derive=False)
 
                 try:
@@ -1193,9 +1250,8 @@ if __name__ == '__main__':
         # Il est situé en ant/post sur les billes cranes = zero scan = table height (voir __init__ de Patient())
 
         # modification du type de tous les points en Undefined au cazou
-        if iteration > 0:
-            for poi in obj_patient.case.PatientModel.PointsOfInterest:
-                poi.Type = 'Undefined'
+        for poi in obj_patient.case.PatientModel.PointsOfInterest:
+            poi.Type = 'Undefined'
 
         laser_rouge_HFS = "laser rouge"
 
@@ -1265,7 +1321,24 @@ if __name__ == '__main__':
             except:
                 print("No changes to save.")
 
-        obj_patient.beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.3, 'y': 0.5, 'z': 0.3})
+        obj_patient.beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.3, 'y': 0.3, 'z': 0.5})
+
+        if direction == 'HFS':
+            # modification de la grille de calcul tmtc
+            dosegrid = obj_patient.beam_set.GetDoseGrid()
+            Corner = dosegrid.Corner
+            lim_post = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+                "Lower pallet Radixact"].GetBoundingBox()[1].y
+            Corner['y']= lim_post - 50
+
+            VoxelSize = dosegrid.VoxelSize
+            NrVoxels = dosegrid.NrVoxels
+            NrVoxels['y'] += 50
+            retval_0 = obj_patient.beam_set.UpdateDoseGrid(Corner=Corner,
+                                                           VoxelSize=VoxelSize,
+                                                           NumberOfVoxels=NrVoxels)
+
+            obj_patient.beam_set.FractionDose.UpdateDoseGridStructures()
 
         ###############################################################################################################
         ###############################################################################################################
