@@ -222,8 +222,17 @@ class Patient:
 
         x, y, z = isocenter
 
+        beam_check = [beam.Name for beam in self.beam_set.Beams]
+
         # Création des différents faisceaux
+        iterator = 0
         for beam_name, angle in zip(beam_names, angles):
+
+            # Vérification. Est ce que le faisceau existe déjà, si oui ne pas le créer
+            if beam_name in beam_check:
+                print(f'-> Le faisceau {beam_name} existe déjà, il ne sera pas recréé.')
+                continue
+
             # Création du faisceau antérieur
             retval_0 = self.beam_set.CreatePhotonBeam(BeamQualityId="6", CyberKnifeCollimationType="Undefined",
                                                       CyberKnifeNodeSetName=None, CyberKnifeRampVersion=None,
@@ -238,16 +247,16 @@ class Patient:
             retval_0.SetBolus(BolusName="")
             self.beam_set.Beams[beam_name].BeamMU = 0
 
-        for num in range(len(beam_names)):
             self.plan.OptimizationParameters.TreatmentSetupSettings[0].BeamSettings[
-                num].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
-                                                                                 PitchTomoHelical=None,
-                                                                                 PitchTomoDirect=pitch,
-                                                                                 BackJawPosition=2.1,
-                                                                                 FrontJawPosition=-2.1,
-                                                                                 MaxDeliveryTime=None,
-                                                                                 MaxGantryPeriod=None,
-                                                                                 MaxDeliveryTimeFactor=max_delivery_factor)
+                iterator].TomoPropertiesPerBeam.EditTomoBasedBeamOptimizationSettings(JawMode="Dynamic",
+                                                                               PitchTomoHelical=None,
+                                                                               PitchTomoDirect=pitch,
+                                                                               BackJawPosition=2.1,
+                                                                               FrontJawPosition=-2.1,
+                                                                               MaxDeliveryTime=None,
+                                                                               MaxGantryPeriod=None,
+                                                                               MaxDeliveryTimeFactor=max_delivery_factor)
+            iterator += 1
 
     def set_prescription(self):
         """
@@ -284,7 +293,7 @@ class Patient:
             self.fraction_dose = 200
 
     def create_plan(self, plan_name, bs_name, machine_name, TreatmentTechnique, patient_position,
-                    OptimalityTolerance=None, MaxNumberOfIterations=None, ComputeFinalDose=None):
+                    OptimalityTolerance=None, MaxNumberOfIterations=None, ComputeFinalDose=None, prescription_roi=None):
         """
         Cette fonction permet de créer un plan
         :param plan_name: nom du plan
@@ -305,6 +314,9 @@ class Patient:
 
         if MaxNumberOfIterations is None:
             MaxNumberOfIterations = 30
+
+        if prescription_roi is None:
+            prescription_roi = 'PTV FFS'
 
         # vérification de la non-existence du plan avant création
         list_of_plans = [plan.Name for plan in self.case.TreatmentPlans]
@@ -355,7 +367,11 @@ class Patient:
         self.beam_set = beam_set
 
         # Si la prescription existe déjà, ne pas la recréer
-        if not beam_set.Prescription.PrescriptionDoseReferences:
+        if type(self.beam_set.Prescription) == type(None):
+            beam_set.AddRoiPrescriptionDoseReference(RoiName=prescription_roi, DoseVolume=0,
+                                                     PrescriptionType="MedianDose",
+                                                     DoseValue=self.total_dose, RelativePrescriptionLevel=1)
+        elif self.beam_set.Prescription.PrescriptionDoseReferences.Count == 0:
             beam_set.AddRoiPrescriptionDoseReference(RoiName=prescription_roi, DoseVolume=0,
                                                      PrescriptionType="MedianDose",
                                                      DoseValue=self.total_dose, RelativePrescriptionLevel=1)
@@ -716,7 +732,7 @@ class Patient:
                 'x': x, 'y': y, 'z': z}
 
     def objectifs_auto_filling(self, plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint,
-                               HighDoseLevel):
+                               HighDoseLevel, RestrictToBeamSet):
         """
         Cette fonction permet de créer un objectif de dose et de remplir tous les paramètres
         :param plan: plan = get_current_plan()
@@ -735,7 +751,7 @@ class Patient:
                                           IsConstraint=IsConstraint,
                                           RestrictAllBeamsIndividually=False,
                                           RestrictToBeam=None, IsRobust=IsRobust,
-                                          RestrictToBeamSet=None, UseRbeDose=False)
+                                          RestrictToBeamSet=RestrictToBeamSet, UseRbeDose=False)
 
         # Remplissage des valeurs
         # On regarde le nombre de fonctions déjà présentes. En considérant que la fonction
@@ -781,13 +797,19 @@ class Patient:
             IsRobust = row.IsRobust
             IsConstraint = row.IsConstraint
             HighDoseLevel = row.HighDoseLevel * obj_patient.total_dose
+            RestrictToBeamSet = row.RestrictToBeamSet
+
+            if RestrictToBeamSet:
+                RestrictToBeamSet = self.beam_set.DicomPlanLabel
+            else:
+                RestrictToBeamSet = None
 
             if IsRobust:  # Cette fonction permet d'activer la robustesse ssi un objectif est robuste
                 robustesse = True
 
             # Utilisation de la fonction set_obj_function (définie hors classe)
             self.objectifs_auto_filling(obj_patient.plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust,
-                                        IsConstraint, HighDoseLevel)
+                                        IsConstraint, HighDoseLevel, RestrictToBeamSet)
 
         # si au moins une case est robuste dans le fichier csv, on active la robustesse
         if robustesse:
@@ -890,6 +912,34 @@ class Patient:
             Center={'x': cx, 'y': cy, 'z': cz},
             Representation="TriangleMesh", VoxelSize=None)
 
+    def get_prescription(self):
+        """Recherche de la prescription. Retourne la valeur de dose en cGy"""
+
+        n_fract = []
+        dose = []
+
+        for tp in self.case.TreatmentPlans:
+            for bs in tp.BeamSets:
+                try:
+                    n_fract.append(bs.FractionationPattern.NumberOfFractions)
+                except:
+                    pass
+
+                try:
+                    dose.append(bs.Prescription.PrimaryPrescriptionDoseReference.DoseValue)
+                except:
+                    pass
+
+        dose = np.unique(dose)[0]
+        n_fract = np.unique(n_fract)[0]
+
+        assert dose / 200 == n_fract
+        self.number_of_fractions = int(n_fract)
+        self.fraction_dose = dose / self.number_of_fractions
+        self.total_dose = dose
+
+        return dose
+
 
 # -------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------
@@ -902,6 +952,8 @@ if __name__ == '__main__':
     # Création de l'objet patient. Définit par défaut le scanner HFS en primary
     obj_patient = Patient()
 
+    obj_patient.set_primary(obj_patient.examinations['FFS'])
+
     # Enfant ou adulte? True or False
     pediatrique = obj_patient.pedia
 
@@ -909,280 +961,10 @@ if __name__ == '__main__':
     print("Les fichiers csv contenant les objectifs et contraintes dosimétriques seront lus dans le répertoire :\n"
           rf"->  {obj_patient.directory}", "\n")
 
-    # Création de la prescription
-    obj_patient.set_prescription()
+    dose = obj_patient.get_prescription()
 
     # Vérification que tout va bien avant de lancer le script (présence de toutes les structures, des fichiers csv etc)
     obj_patient.verifications()
-
-    # ------------------------------------------------------------------------------------
-    # On commencera d'abord sur le scanner Head First puis on travaille sur le Feet First. SI pédiatrique, on ne
-    # travaille que sur le HFS. La liste to_do est utilisée plus loin dans le script.
-    if pediatrique:
-        to_do = ['HFS', 'HFS']
-    else:
-        to_do = ['HFS', 'FFS']
-
-    # do_it est mis sur False pour sauter toute la partie Patient Modeling pour la programmation du script
-    do_it = True
-    if check_roi(obj_patient.case, 'PTV FFS'):
-        if easygui.buttonbox('Les structures semblent avoir déjà été créées, recommencer à zéro?',
-                             choices=["Oui", "Non"]) == "Non":
-            do_it = False
-
-    if do_it:
-        #########################################################################
-        #########################################################################
-        ##################### TRAVAIL DE PREPARATION ############################
-        #########################################################################
-        #########################################################################
-
-        if not pediatrique:
-            # Première partie, réalisation du recalage rigide
-            # On ne fait cette étape que si aucun recalage n'existe. Si un recalage existe, on demande à l'utilisateur
-            # s'il souhaite le refaire.
-
-            if (obj_patient.case.Registrations.Count == 0) or \
-                    (obj_patient.case.Registrations.Count != 0 and
-                     easygui.buttonbox('Un recalage existe déjà, le conserver?', choices=["Oui", "Non"]) == "Non"):
-
-                # Suppression pure et simple de tous les FOR registration déjà existants
-                for reg in obj_patient.case.Registrations:
-                    FFOR = reg.FromFrameOfReference
-                    RFOR = reg.ToFrameOfReference
-                    obj_patient.case.RemoveFrameOfReferenceRegistration(
-                        FloatingFrameOfReference=FFOR,
-                        ReferenceFrameOfReference=RFOR)
-                    print('-> Un recalage a été supprimé')
-
-                # Création du recalage entre le scanner FFS et le scanner HFS
-                # 1. création du for reg
-                print(f'Recalage rigide entre {obj_patient.examinations["HFS"]} et {obj_patient.examinations["FFS"]}')
-                obj_patient.case.CreateNamedIdentityFrameOfReferenceRegistration(
-                    FromExaminationName=obj_patient.examinations['HFS'],
-                    ToExaminationName=obj_patient.examinations['FFS'],
-                    RegistrationName="HFS to FFS", Description=None)
-
-                # recalage automatique
-                obj_patient.case.ComputeGrayLevelBasedRigidRegistration(
-                    FloatingExaminationName=obj_patient.examinations['HFS'],
-                    ReferenceExaminationName=obj_patient.examinations[
-                        'FFS'],
-                    UseOnlyTranslations=True, HighWeightOnBones=True,
-                    InitializeImages=True, FocusRoisNames=[],
-                    RegistrationName=None)
-                print("-> Ok!")
-
-                # Deuxième partie : réalisation du recalage élastique "rigide". On utilise la méthode discard intensity
-                # avec la vessie comme volume d'intérêt. Pour cela, la vessie doit être copiée d'un scanner à l'autre.
-                print(f"Copie de la structure Vessie d'un scanner à l'autre ...")
-                obj_patient.case.PatientModel.CopyRoiGeometries(SourceExamination=obj_patient.examination,
-                                                                TargetExaminationNames=[
-                                                                    obj_patient.examinations['FFS']],
-                                                                RoiNames=["Vessie"], ImageRegistrationNames=[],
-                                                                TargetExaminationNamesToSkipAddedReg=[
-                                                                    obj_patient.examinations['FFS']])
-
-                # Création du recalage élastique rigide. On le fait dans les deux sens pour simplifier le moment où on
-                # déforme et tout et tout. La fonction réalise le mapping des POI d'un scanner vers l'autre
-                for direction in ['HFS', 'FFS']:
-                    if direction == "HFS":
-                        recalage_elastique(direction, mapping=True)
-                    else:
-                        recalage_elastique(direction, mapping=False)
-
-        # Travail sur les volumes
-        print("\nTravail sur les ROI...")
-
-        # Création des ROI. Il n'existe désormais plus de différence entre les adultes et les enfants.
-
-        if obj_patient.total_dose > 800:  # Prescription 12 Gy
-            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS", 'PTV poumons', 'PTV reins',
-                        'opt PTV HFS', 'PTV background']
-            colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0", "#66FFFF", "#666633",
-                      '#696100', '#0000FF']
-
-        else:  # Prescriptions 2 ou 8 Gy. On n'a plus besoin d'OAR car la dose est inférieure ou égale
-            # aux contraintes
-            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS"]
-            colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0"]
-
-        # Vérification de l'existance des differentes roi dans le case
-        resultat = [check_roi(obj_patient.case, roi) for roi in ROI_LIST]
-        # Création des ROI dans le roi set si ROI non existantes
-        [obj_patient.create_roi(ROI_LIST[index], color=colors[index]) for index, roi in enumerate(resultat) if not
-        roi]
-
-        # ------------------------------------------------------------------------------------
-        # On commence d'abord sur le scanner Head First puis on travaille sur le Feet First. Si pédiatrique, on ne
-        # travaille que sur le HFS
-
-        for direction in to_do:
-            # ct_name pour simplification dans la boucle for
-            ct_name = obj_patient.examinations[direction]
-            ct = obj_patient.case.Examinations[ct_name]
-
-            # ct étudié mis en primary (très important, car re-définit self.exam_name et self.examination dans la classe
-            obj_patient.set_primary(ct_name, direction)
-
-            # Retrait des trous dans externe
-            obj_patient.case.PatientModel.StructureSets[ct_name].SimplifyContours(RoiNames=[obj_patient.external_name],
-                                                                                  RemoveHoles3D=True,
-                                                                                  RemoveSmallContours=False,
-                                                                                  AreaThreshold=None,
-                                                                                  ReduceMaxNumberOfPointsInContours=False,
-                                                                                  MaxNumberOfPoints=None,
-                                                                                  CreateCopyOfRoi=False,
-                                                                                  ResolveOverlappingContours=True)
-
-            # créer poumon G+D. On réalise +0.5 / -0.5 pour supprimer les défauts du volume
-            obj_patient.algebra(out_roi="Poumons", in_roiA=["Poumon D", "Poumon G"], margeA=0.5, color="Aqua",
-                                derive=False)
-            obj_patient.algebra(out_roi="Poumons", in_roiA=["Poumons"], margeA=-0.5, color="Aqua",
-                                derive=False)
-            # Remove holes
-            obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].SimplifyContours(RoiNames=["Poumons"],
-                                                                                                RemoveHoles3D=True,
-                                                                                                RemoveSmallContours=False,
-                                                                                                AreaThreshold=None,
-                                                                                                ReduceMaxNumberOfPointsInContours=False,
-                                                                                                MaxNumberOfPoints=None,
-                                                                                                CreateCopyOfRoi=False,
-                                                                                                ResolveOverlappingContours=False)
-
-            # créer somme des reins
-            obj_patient.algebra(out_roi="Reins", in_roiA=["Rein D", "Rein G"], color="Yellow")
-
-            # ------------------------------------------------------------------------------------
-            # Création des cylindres
-            # récupération du point "jonction", positionné sur la bille au niveau de la jonction
-            _, _, y0 = obj_patient.jonction  # y de ref est au niveau de la jonction
-            x0, z0 = 0, obj_patient.zero_scan
-
-            # Liste qui contiendra pour chaque volume, son point de départ et son point d'arrivée
-            from_to = []
-
-            # Réalisation des PTV 2 à 5, entourant la bille jonction
-            for index, roi in enumerate(['PTV_1', 'PTV_2', 'PTV_3', 'PTV_4']):
-                # y0 est au niveau de la premiere coupe de PTV_2
-                # la premiere coupe de PTV_3 est donc située à -2; celle de D1 à +2 etc
-                # soit -2 ; 0 ; 2 ; 4 -> 4-2*i
-                yhaut = y0 + 4 - 2 * index
-                y_bas = yhaut - 2
-                from_to.append((roi, yhaut, y_bas))
-
-            # lim sup et inf correspondent au points les plus hauts et bas du contour externe
-            # Réalisation du "PTV HFS", au-dessus du dernier PTV de la jonction, jusqu'au sommet du crane
-            haut_PTV1 = y0 + 4
-            from_to.append(["PTV HFS", obj_patient.lim_sup, haut_PTV1])
-
-            # Réalisation du PTV FFS : en dessous du PTV 4
-            from_to.append(['PTV FFS', y0 - 4, obj_patient.lim_inf])
-
-            # Une fois que toutes les bornes sont déterminées, on crée les PTVS
-            for roi, f, t in from_to:
-                print(f'Création du PTV suivant : {roi} entre y = {str(f)} et y = {str(t)} ')
-                obj_patient.create_cylinder_ptv(roi, f, t)
-                print('-> OK!')
-
-            # Dernière étape: soustraction des volumes deux à deux pour éviter le chevauchement des PTVS
-            ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS"]
-            for i in range(len(ROI_LIST) - 1):
-                obj_patient.algebra(out_roi=ROI_LIST[i], in_roiA=[ROI_LIST[i]], in_roiB=[ROI_LIST[i + 1]],
-                                    ResultOperation="Subtraction", derive=False)
-
-            # Création d'un volume d'optimisation en sortie de jonction
-            # HFS -> PTV_D6 devient "opt_jonction"
-            # FFS -> PTV D1 devient "opt_jonction"
-
-            if direction == "HFS":
-                source = "PTV FFS"
-                OAR_name = "opt_jonction"
-            else:
-                source = "PTV HFS"
-                OAR_name = "opt_jonction"
-
-                # Création du volume PTV backgroung
-                obj_patient.algebra('PTV background', ['PTV_1', 'PTV_2', 'PTV_3', 'PTV_4', 'PTV FFS'], Type='Ptv')
-
-            # Création du volume
-            obj_patient.algebra(out_roi=OAR_name, in_roiA=[source], color='Magenta', Type="Organ")
-            obj_patient.case.PatientModel.RegionsOfInterest[OAR_name].DeleteExpression()
-
-            if direction == 'HFS' and obj_patient.total_dose > 800:
-
-                # Création PTV poumons = poumons - 1cm # seulement pour le scanner HFS!
-                obj_patient.algebra(out_roi='PTV poumons', in_roiA=["Poumons"], margeA=-1, Type="Ptv", color="Yellow")
-
-                # PTV paroi thoracique = paroi thoracique + expansion du poumon de 1.5 cm + coeur. Ce volume est
-                # utilisé pour que l'optimisation sur les poumons ne diminue pas trop la couverture aux alentours
-
-                # 1. Expansion des poumons
-                obj_patient.algebra(out_roi='opt pourtour poumons', in_roiA=["Poumons"], margeA=1.5,
-                                    in_roiB=["Poumons"],
-                                    margeB=0, ResultOperation="Subtraction", derive=False)
-                # 2. Union du PTV, de l'expansion et du coeur puis rétraction à la peau
-                obj_patient.algebra(out_roi='PTV Paroi thoracique', in_roiA=["opt pourtour poumons", "Coeur"],
-                                    in_roiB=[obj_patient.external_name], margeB=-0.3, ResultOperation="Intersection",
-                                    Type="Ptv", derive=False)
-
-                # Création PTV reins = reins - 1cm # seulement pour le scanner HFS!
-                obj_patient.algebra(out_roi='PTV reins', in_roiA=["Reins"], margeA=-1, Type="Ptv", color="Yellow")
-
-                # PTV HFS - PTV Poumons - PTV reins -  = PTV HFS
-                obj_patient.algebra(out_roi='PTV HFS', in_roiA=["PTV HFS"], in_roiB=["PTV poumons", 'PTV reins'],
-                                    ResultOperation="Subtraction", derive=False)
-
-                # opt PTV HFS = PTV HFS - Poumons - Reins
-                obj_patient.algebra(out_roi='opt PTV HFS', in_roiA=["PTV HFS"], in_roiB=["Poumons", 'Reins'],
-                                    ResultOperation="Subtraction", derive=False)
-
-            else:
-                for roi in ['PTV poumons', 'PTV reins', 'Reins', 'PTV background']:
-                    try:
-                        # Supprimer la dérivation
-                        obj_patient.case.PatientModel.RegionsOfInterest[roi].DeleteExpression()
-                    except:
-                        print(f"Impossible de supprimer la dérivation de la ROI {roi}")
-
-            # Gestion du contour externe
-            if direction == 'HFS':
-                obj_patient.algebra('External_dosi', [obj_patient.external_name], derive=False)
-            elif direction == 'FFS':
-                # Création du volume contenant tout le champ de vue
-                image_fov_name = 'fov_box'
-                obj_patient.create_fov_box(roi_name=image_fov_name, retraction=2)
-
-                # Création du field of view qui servira d'externe pour le plan pieds
-                fov_name = 'Field-of-view'
-                obj_patient.create_field_of_view(roi_name=fov_name)
-                obj_patient.algebra('External_dosi', [fov_name])
-
-                # Création du bloc table que l'on retirera au fov
-                bloc_table = 'bloc_table'
-                obj_patient.create_bloc_table(roi_name=bloc_table)
-
-                # fov - bloc table = fov
-                obj_patient.algebra('External_dosi', [fov_name], [bloc_table], ResultOperation="Subtraction",
-                                    derive=False)
-
-                # fov = fov intersect image_fov_name
-                obj_patient.algebra('External_dosi', ['External_dosi'], [image_fov_name],
-                                    ResultOperation="Intersection",
-                                    derive=False)
-
-                obj_patient.case.PatientModel.ToggleExcludeFromExport(ExcludeFromExport=True,
-                                                                      RegionOfInterests=['External_dosi', 'fov_box',
-                                                                                         'Field-of-view',
-                                                                                         'bloc_table', ],
-                                                                      PointsOfInterests=[])
-
-                try:
-                    obj_patient.case.PatientModel.RegionsOfInterest['External_dosi'].DeleteExpression()
-                except:
-                    print(f"Impossible de supprimer la dérivation de la ROI 'External_dosi'")
-
-    obj_patient.case.PatientModel.RegionsOfInterest['External_dosi'].SetAsExternal()
 
     #########################################################################
     #########################################################################
@@ -1194,187 +976,92 @@ if __name__ == '__main__':
     date = datetime.today().strftime('%Y%m%d')
     date = date[2:]  # Pour enlever les deux premiers chiffres de l'année (2022 -> 22)
 
-    if not pediatrique:
-        PLAN_NAMES = [f"{date}_HFS", f"{date}_FFS"]
-        PATIENT_POSITIONS = ["HeadFirstSupine", "FeetFirstSupine"]
-        DIRECTIONS = ['HFS', 'FFS']
+    machine_name = 'Radixact1'
+    TreatmentTechnique = 'TomoDirect'
 
-    elif pediatrique:
-        PLAN_NAMES = [f"{date}_HFS", f"{date}_HFS"]
-        PATIENT_POSITIONS = ["HeadFirstSupine", "HeadFirstSupine"]
-        DIRECTIONS = ['HFS', 'HFS']
+    plan_name = 'Background'
+    bs_name_HFS = 'HFS_background'
+    bs_name_FFS = 'FFS_background'
+    patient_position = 'FeetFirstSupine'
+    prescription_roi = 'PTV HFS'
 
-    PRESCRIPTION_ROI = ['PTV HFS', 'PTV FFS']
-    BS_NAMES = ["Corps", "Jambes"]
-    TREATMENT_TECHNIQUES = ["TomoHelical", "TomoDirect"]
-    machine_name = "Radixact1"
+    # recherche du plan nommé Empty plan. Plan sélectionné et renommé
+    # todo: potentiellement laisser choisir un autre plan pour généraliser
+    obj_patient.patient.Save()
+    plan = get_current('Plan')
+    for plan_names in obj_patient.case.TreatmentPlans:
+        if plan_names.Name.lower() == "empty plan" or plan_names == plan_name:
+            obj_patient.case.TreatmentPlans[plan_names.Name].SetCurrent()
+            plan = get_current('Plan')
+            plan.Name = plan_name
+            obj_patient.patient.Save()
+            break
 
-    # Si la dose est inférieure ou égale à 8 Gy, on ajoute un plan test Tomodirect de test
-    # (en remplacement du tomohelical)
-    if obj_patient.total_dose <= 800:
-        PLAN_NAMES.append(f"{date}_HFS_TD")
-        PRESCRIPTION_ROI.append('PTV HFS')
-        BS_NAMES.append("Corps_Tomodirect")
-        TREATMENT_TECHNIQUES.append("TomoDirect")
-        PATIENT_POSITIONS.append("HeadFirstSupine")
-        DIRECTIONS.append('HFS')
+    # Beam_set Empty plan renommé
+    plan.BeamSets[0].SetCurrent()
+    bs_HFS = get_current("BeamSet")
 
-    # Itération sur les différents plans à réaliser
-    iteration = 0
-    for direction, plan_name, bs_name, patient_position, TreatmentTechnique, prescription_roi in zip(DIRECTIONS,
-                                                                                                     PLAN_NAMES,
-                                                                                                     BS_NAMES,
-                                                                                                     PATIENT_POSITIONS,
-                                                                                                     TREATMENT_TECHNIQUES,
-                                                                                                     PRESCRIPTION_ROI):
-        print(f'----> Création du plan "{plan_name}" et du beam set "{bs_name}" ')
+    if bs_HFS.DicomPlanLabel == 'Empty plan':
+        bs_HFS.DicomPlanLabel = bs_name_HFS
 
-        # CT étudié en primary
-        obj_patient.set_primary(obj_patient.examinations[direction])
+    # Si la prescription existe déjà, ne pas la recréer
+    if not bs_HFS.Prescription:
+        try:
+            bs_HFS.AddRoiPrescriptionDoseReference(RoiName=prescription_roi, DoseVolume=0,
+                                                   PrescriptionType="MedianDose",
+                                                   DoseValue=dose, RelativePrescriptionLevel=1)
+            print(f'Prescription ajustée à {dose / 100} Gray')
+        except:
+            print('Unable to create prescription')
 
-        # Attribution de l'IVDT qui va bien
-        if not obj_patient.examination.EquipmentInfo.ImagingSystemReference:
-            obj_patient.examination.EquipmentInfo.SetImagingSystemReference(ImagingSystemName="SIEMENS_RT_mDD")
-        elif not obj_patient.examination.EquipmentInfo.ImagingSystemReference.get(
-                'ImagingSystemName') == 'SIEMENS_RT_mDD':
-            obj_patient.examination.EquipmentInfo.SetImagingSystemReference(ImagingSystemName="SIEMENS_RT_mDD")
+    bs_HFS.SetAutoScaleToPrimaryPrescription(AutoScale=False)
 
-        print('~~~~ Saving case ~~~~')
-        obj_patient.patient.Save()
+    # Création du second beam_set
+    obj_patient.create_plan(plan_name, bs_name_FFS, machine_name, TreatmentTechnique, patient_position,
+                            prescription_roi='PTV FFS')
 
-        # Création du plan
-        obj_patient.create_plan(plan_name, bs_name, machine_name, TreatmentTechnique, patient_position)
+    # Création de la dépendance (background dose)
+    obj_patient.case.TreatmentPlans[plan_name].UpdateDependency(DependentBeamSetName=bs_name_FFS,
+                                                                BackgroundBeamSetName=bs_name_HFS,
+                                                                DependencyUpdate="CreateDependency")
 
-        ########################################################
-        # définition des points de ref
+    # On positionne les lasers rouges et vert sur le point abdomen mais le rouge est décalé sur la bille
+    # jonction en GD
+    coords_laser_rouges_HFS = (obj_patient.jonction[0], obj_patient.zero_scan, obj_patient.abdomen[2])
 
-        # ------------------------------------------------------------------------------------
-        # Positionnement du localization point HFS -> LASER ROUGE
-        # Le loc point du traitement HFS est en Inf/Sup sur les billes thorax, à zéro en G/D
-        # Il est situé en ant/post sur les billes cranes = zero scan = table height (voir __init__ de Patient())
+    # Pour le plan FFS, le laser vert est positionné en AP au centre du volume PTV ffs afin que le patient
+    # soit bien centré en hauteur et n'ait pas les genoux qui dépassent du cadre. Mais attention, ne doit pas
+    # dépasser 21.5 cm par rapport à la table
 
-        # modification du type de tous les points en Undefined au cazou
-        for poi in obj_patient.case.PatientModel.PointsOfInterest:
-            poi.Type = 'Undefined'
+    AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+        'PTV FFS'].GetCenterOfRoi().y
 
-        laser_rouge_HFS = "laser rouge"
+    # si la position du centre du PTV FFS excède 21 cm de la upper pallet, on prend 21 cm
+    if abs(AP_iso_FFS) > abs(obj_patient.upper_pallet) + 21:
+        AP_iso_FFS = obj_patient.upper_pallet - 21
 
-        # On positionne les lasers rouges et vert sur le point abdomen mais le rouge est décalé sur la bille
-        # jonction en GD
-        coords_laser_rouges_HFS = (obj_patient.jonction[0], obj_patient.zero_scan, obj_patient.abdomen[2])
+    coords_laser_vert = (0, AP_iso_FFS, obj_patient.abdomen[2])
 
-        # Création des lasers
+    # création des faisceaux tomo direct
+    # Cette ligne permet de créer le plan tomodirect normal (ant/post). Les données sont mises par défaut
+    obj_patient.create_tomodirect_plan(bs_name_FFS, coords_laser_vert)
 
-        if 'corps' in bs_name.lower():  # Plan HFS
-            # Le laser vert est mis en antépost au centre vertical du volume "Poumons"
-            AP_iso_HFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
-                'Poumons'].GetCenterOfRoi().y
-            coords_laser_vert = (0, AP_iso_HFS, obj_patient.abdomen[2])
+    # modification du point de specification de dose pour le plan FFS (sinon export impossible)
+    try:
+        obj_patient.create_dsp()
+        xd, yd, zd = obj_patient.poi_DSP
+        retval_0 = obj_patient.beam_set.CreateDoseSpecificationPoint(Name="DSP", Coordinates={'x': xd,
+                                                                                              'y': yd,
+                                                                                              'z': zd},
+                                                                     VisualizationDiameter=1)
+    except:
+        print('impossible de créer le point DSP')
+        pass
 
-        elif 'jambe' in bs_name.lower():  # Plan FFS (ou HFS pour les petits)
-            # Pour le plan FFS, le laser vert est positionné en AP au centre du volume PTV ffs afin que le patient
-            # soit bien centré en hauteur et n'ait pas les genoux qui dépassent du cadre. Mais attention, ne doit pas
-            # dépasser 21.5 cm par rapport à la table
+    for beam in obj_patient.beam_set.Beams:
+        beam.SetDoseSpecificationPoint(Name="DSP")
 
-            AP_iso_FFS = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
-                'PTV FFS'].GetCenterOfRoi().y
-
-            # si la position du centre du PTV FFS excède 21 cm de la upper pallet, on prend 21 cm
-            if abs(AP_iso_FFS) > abs(obj_patient.upper_pallet) + 21:
-                AP_iso_FFS = obj_patient.upper_pallet - 21
-
-            coords_laser_vert = (0, AP_iso_FFS, obj_patient.abdomen[2])
-
-        # création du laser rouge
-        obj_patient.create_poi(laser_rouge_HFS, coords_laser_rouges_HFS, color='Red')
-        # laser rouge devient localization point
-        obj_patient.case.PatientModel.PointsOfInterest[laser_rouge_HFS].Type = "LocalizationPoint"
-        # création du laser vert
-        obj_patient.create_poi('laser vert', coords_laser_vert, color='Green')
-
-        ########################################################
-        # Création du faisceau
-
-        if TreatmentTechnique == "TomoHelical":
-            # Création du plan tomo
-            obj_patient.create_tomohelical_plan(bs_name, coords_laser_vert, pitch=0.38, gantry_period=20)
-
-        elif TreatmentTechnique == "TomoDirect":
-            try:
-                # Si la dose est inférieure ou égale à 8 Gy, on crée un pan tomodirect de test avec 4 faisceaux
-                if bs_name == "Corps_Tomodirect":
-                    beam_names = ['obl_ant_G', 'obl_post_G', 'obl_post_D', 'obl_ant_D']
-                    angles = [60, 120, 240, 300]
-                    obj_patient.create_tomodirect_plan(bs_name, coords_laser_vert, beam_names, angles)
-
-                else:
-                    # Cette ligne permet de créer le plan tomodirect normal (ant/post). Les données sont mises
-                    # par défaut
-                    obj_patient.create_tomodirect_plan(bs_name, coords_laser_vert)
-
-                # modification du point de specification de dose pour le plan FFS (sinon export impossible)
-                obj_patient.create_dsp()
-                xd, yd, zd = obj_patient.poi_DSP
-                retval_0 = obj_patient.beam_set.CreateDoseSpecificationPoint(Name="DSP", Coordinates={'x': xd,
-                                                                                                      'y': yd,
-                                                                                                      'z': zd},
-                                                                             VisualizationDiameter=1)
-                for beam in obj_patient.beam_set.Beams:
-                    beam.SetDoseSpecificationPoint(Name="DSP")
-
-            except:
-                print("No changes to save.")
-
-        obj_patient.beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.3, 'y': 0.3, 'z': 0.5})
-
-        if direction == 'HFS':
-            # modification de la grille de calcul tmtc
-            dosegrid = obj_patient.beam_set.GetDoseGrid()
-            Corner = dosegrid.Corner
-            lim_post = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
-                "Lower pallet Radixact"].GetBoundingBox()[1].y
-            Corner['y'] = lim_post - 50
-
-            VoxelSize = dosegrid.VoxelSize
-            NrVoxels = dosegrid.NrVoxels
-            NrVoxels['y'] += 50
-            retval_0 = obj_patient.beam_set.UpdateDoseGrid(Corner=Corner,
-                                                           VoxelSize=VoxelSize,
-                                                           NumberOfVoxels=NrVoxels)
-
-            obj_patient.beam_set.FractionDose.UpdateDoseGridStructures()
-
-        ###############################################################################################################
-        ###############################################################################################################
-        ############################################   OPTIMISATION     ###############################################
-        ###############################################################################################################
-        ###############################################################################################################
-
-        # Les paramètres d'optimisation sont inscrits dans un fichier csv dans le g commun. Le fichier est lu avec
-        # pandas
-
-        if direction == 'HFS':
-
-            if not pediatrique:
-                if obj_patient.total_dose > 800:
-                    filename = "12Gy_corps.csv"
-                else:
-                    if TreatmentTechnique == 'TomoHelical':
-                        filename = "2Gy_corps.csv"
-
-                    elif TreatmentTechnique == 'TomoDirect':
-                        filename = "2Gy_corps_robuste.csv"
-            elif pediatrique:
-
-                if obj_patient.total_dose > 800:
-                    filename = "12Gy_pedia.csv"
-                else:
-                    filename = "2Gy_pedia"
-        else:
-            filename = "jambes.csv"
-
-        obj_patient.create_objectives(filename)
-
-    iteration += 1
-    print('~~~~ Saving case ~~~~')
+    # optimisation
+    filename = "jambes_background.csv"
+    obj_patient.create_objectives(filename)
     obj_patient.patient.Save()
