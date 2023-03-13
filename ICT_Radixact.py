@@ -581,7 +581,7 @@ class Patient:
             self.algebra(out_roi=roi_name, in_roiA=[roi_name], in_roiB=[obj_patient.external_name], margeB=-0.3,
                          ResultOperation="Intersection", derive=False)
 
-    def get_point_coords(self, point_name, round_it=True):
+    def get_point_coords(self, point_name, round_it=False):
         """ Méthode permettant de récupérer les coordonnées d'un point si celui-ci existe. \n
         - Input: nom du point \n
         - Outupt: coordonnées du point (x,y,z) ou None"""
@@ -716,7 +716,7 @@ class Patient:
                 'x': x, 'y': y, 'z': z}
 
     def objectifs_auto_filling(self, plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust, IsConstraint,
-                               HighDoseLevel):
+                               HighDoseLevel, RestrictToBeamSet):
         """
         Cette fonction permet de créer un objectif de dose et de remplir tous les paramètres
         :param plan: plan = get_current_plan()
@@ -735,7 +735,7 @@ class Patient:
                                           IsConstraint=IsConstraint,
                                           RestrictAllBeamsIndividually=False,
                                           RestrictToBeam=None, IsRobust=IsRobust,
-                                          RestrictToBeamSet=None, UseRbeDose=False)
+                                          RestrictToBeamSet=RestrictToBeamSet, UseRbeDose=False)
 
         # Remplissage des valeurs
         # On regarde le nombre de fonctions déjà présentes. En considérant que la fonction
@@ -781,13 +781,19 @@ class Patient:
             IsRobust = row.IsRobust
             IsConstraint = row.IsConstraint
             HighDoseLevel = row.HighDoseLevel * obj_patient.total_dose
+            RestrictToBeamSet = row.RestrictToBeamSet
+
+            if RestrictToBeamSet:
+                RestrictToBeamSet = self.beam_set.DicomPlanLabel
+            else:
+                RestrictToBeamSet = None
 
             if IsRobust:  # Cette fonction permet d'activer la robustesse ssi un objectif est robuste
                 robustesse = True
 
             # Utilisation de la fonction set_obj_function (définie hors classe)
             self.objectifs_auto_filling(obj_patient.plan, FunctionType, RoiName, DoseLevel, Weight, IsRobust,
-                                        IsConstraint, HighDoseLevel)
+                                        IsConstraint, HighDoseLevel, RestrictToBeamSet)
 
         # si au moins une case est robuste dans le fichier csv, on active la robustesse
         if robustesse:
@@ -890,8 +896,6 @@ class Patient:
             Center={'x': cx, 'y': cy, 'z': cz},
             Representation="TriangleMesh", VoxelSize=None)
 
-        # CompositeAction ends
-
 
 # -------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------
@@ -921,7 +925,7 @@ if __name__ == '__main__':
     # On commencera d'abord sur le scanner Head First puis on travaille sur le Feet First. SI pédiatrique, on ne
     # travaille que sur le HFS. La liste to_do est utilisée plus loin dans le script.
     if pediatrique:
-        to_do = ['HFS', 'HFS']
+        to_do = ['HFS']
     else:
         to_do = ['HFS', 'FFS']
 
@@ -1104,8 +1108,8 @@ if __name__ == '__main__':
                 source = "PTV HFS"
                 OAR_name = "opt_jonction"
 
-                # Création du volume PTV backgroung
-                obj_patient.algebra('PTV background', ['PTV_1', 'PTV_2', 'PTV_3', 'PTV_4', 'PTV FFS'], Type='Ptv')
+            # Création du volume PTV background
+            obj_patient.algebra('PTV background', ['PTV_1', 'PTV_2', 'PTV_3', 'PTV_4', 'PTV FFS'], Type='Ptv')
 
             # Création du volume
             obj_patient.algebra(out_roi=OAR_name, in_roiA=[source], color='Magenta', Type="Organ")
@@ -1173,6 +1177,12 @@ if __name__ == '__main__':
                                     ResultOperation="Intersection",
                                     derive=False)
 
+                obj_patient.case.PatientModel.ToggleExcludeFromExport(ExcludeFromExport=True,
+                                                                      RegionOfInterests=['External_dosi', 'fov_box',
+                                                                                         'Field-of-view',
+                                                                                         'bloc_table', ],
+                                                                      PointsOfInterests=[])
+
                 try:
                     obj_patient.case.PatientModel.RegionsOfInterest['External_dosi'].DeleteExpression()
                 except:
@@ -1194,16 +1204,32 @@ if __name__ == '__main__':
         PLAN_NAMES = [f"{date}_HFS", f"{date}_FFS"]
         PATIENT_POSITIONS = ["HeadFirstSupine", "FeetFirstSupine"]
         DIRECTIONS = ['HFS', 'FFS']
+        PRESCRIPTION_ROI = ['PTV HFS', 'PTV FFS']
+        BS_NAMES = ["Corps", "Jambes"]
+        TREATMENT_TECHNIQUES = ["TomoHelical", "TomoDirect"]
+        DEPENDANCE = [None, None, None]
 
     elif pediatrique:
-        PLAN_NAMES = [f"{date}_HFS", f"{date}_HFS"]
-        PATIENT_POSITIONS = ["HeadFirstSupine", "HeadFirstSupine"]
-        DIRECTIONS = ['HFS', 'HFS']
+        # 3 plans sont créés
+        # 1- Plan total contenant un beamset helical pour tout traiter d'un coup
+        # 2-3 - Un plan contenant deux beamseat. Un helical pour la partie corps et un TD pour les pieds
+        PLAN_NAMES = [f"{date}_Total", f"{date}_2plans", f"{date}_2plans"]
+        PATIENT_POSITIONS = ["HeadFirstSupine", "HeadFirstSupine", "HeadFirstSupine"]
+        DIRECTIONS = ['HFS', 'HFS', 'HFS']
+        PRESCRIPTION_ROI = ['PTV HFS', 'PTV HFS', 'PTV FFS']
+        BS_NAMES = ["Corps", "Corps", "Jambes"]
+        TREATMENT_TECHNIQUES = ["TomoHelical", "TomoHelical", "TomoDirect"]
+        DEPENDANCE = [None, None, "Corps"]
 
-    PRESCRIPTION_ROI = ['PTV HFS', 'PTV FFS']
-    BS_NAMES = ["Corps", "Jambes"]
-    TREATMENT_TECHNIQUES = ["TomoHelical", "TomoDirect"]
     machine_name = "Radixact1"
+
+    # paramètres de balistique
+    if not pediatrique:
+        helical_pitch = 0.38
+        gantry_period = 20
+    else:
+        helical_pitch = 0.431
+        gantry_period = 20
 
     # Si la dose est inférieure ou égale à 8 Gy, on ajoute un plan test Tomodirect de test
     # (en remplacement du tomohelical)
@@ -1217,12 +1243,14 @@ if __name__ == '__main__':
 
     # Itération sur les différents plans à réaliser
     iteration = 0
-    for direction, plan_name, bs_name, patient_position, TreatmentTechnique, prescription_roi in zip(DIRECTIONS,
-                                                                                                     PLAN_NAMES,
-                                                                                                     BS_NAMES,
-                                                                                                     PATIENT_POSITIONS,
-                                                                                                     TREATMENT_TECHNIQUES,
-                                                                                                     PRESCRIPTION_ROI):
+    for direction, plan_name, bs_name, patient_position, TreatmentTechnique, prescription_roi, dependance in zip(
+            DIRECTIONS,
+            PLAN_NAMES,
+            BS_NAMES,
+            PATIENT_POSITIONS,
+            TREATMENT_TECHNIQUES,
+            PRESCRIPTION_ROI,
+            DEPENDANCE):
         print(f'----> Création du plan "{plan_name}" et du beam set "{bs_name}" ')
 
         # CT étudié en primary
@@ -1241,6 +1269,11 @@ if __name__ == '__main__':
         # Création du plan
         obj_patient.create_plan(plan_name, bs_name, machine_name, TreatmentTechnique, patient_position)
 
+        if dependance is not None:
+            # Création de la dépendance (background dose)
+            obj_patient.case.TreatmentPlans[plan_name].UpdateDependency(DependentBeamSetName=bs_name,
+                                                                        BackgroundBeamSetName=dependance,
+                                                                        DependencyUpdate="CreateDependency")
         ########################################################
         # définition des points de ref
 
@@ -1293,7 +1326,8 @@ if __name__ == '__main__':
 
         if TreatmentTechnique == "TomoHelical":
             # Création du plan tomo
-            obj_patient.create_tomohelical_plan(bs_name, coords_laser_vert, pitch=0.38, gantry_period=20)
+            obj_patient.create_tomohelical_plan(bs_name, coords_laser_vert, pitch=helical_pitch,
+                                                gantry_period=gantry_period)
 
         elif TreatmentTechnique == "TomoDirect":
             try:
@@ -1321,19 +1355,36 @@ if __name__ == '__main__':
             except:
                 print("No changes to save.")
 
+        # todo: checker que ce soit pertinent ici
         obj_patient.beam_set.SetDefaultDoseGrid(VoxelSize={'x': 0.3, 'y': 0.3, 'z': 0.5})
 
         if direction == 'HFS':
             # modification de la grille de calcul tmtc
             dosegrid = obj_patient.beam_set.GetDoseGrid()
             Corner = dosegrid.Corner
-            lim_post = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
-                "Lower pallet Radixact"].GetBoundingBox()[1].y
-            Corner['y']= lim_post - 50
 
-            VoxelSize = dosegrid.VoxelSize
+            VoxelSize = dosegrid.VoxelSize;
             NrVoxels = dosegrid.NrVoxels
-            NrVoxels['y'] += 50
+
+            # récupération des valeurs pour debug
+            VoxelSize0 = VoxelSize.copy()
+            NrVoxels0 = NrVoxels.copy()
+            Corner0 = Corner.copy()
+
+            # Lorsque l'on ajoute des voxels en +y, on décale la grille dans la direction postérieure On souhaite
+            # rehausser la grille de calcul pour bien couvrir les pieds. On sait que les pieds seront à peu près au
+            # même niveau que le nez du patient (partie la plus antérieure du contour externe
+
+            corner_y = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+                obj_patient.external_name].GetBoundingBox()[0].y
+            sous_table = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+                "Lower pallet Radixact"].GetBoundingBox()[1].y
+            corner_y = corner_y - 5  # au-dessus du nez + 5 cm par sécurité
+            Corner['y'] = corner_y
+
+            hauteur_grille_y = abs(corner_y - abs(sous_table)) + 1  # taille de la grille dans la direction y
+            NrVoxels['y'] = int(abs(hauteur_grille_y / VoxelSize["y"]))
+
             retval_0 = obj_patient.beam_set.UpdateDoseGrid(Corner=Corner,
                                                            VoxelSize=VoxelSize,
                                                            NumberOfVoxels=NrVoxels)
@@ -1361,9 +1412,18 @@ if __name__ == '__main__':
                     elif TreatmentTechnique == 'TomoDirect':
                         filename = "2Gy_corps_robuste.csv"
             elif pediatrique:
-
                 if obj_patient.total_dose > 800:
-                    filename = "12Gy_pedia.csv"
+                    # Pour le plan où l'on traite tout d'une traite en hélicoidal
+                    if iteration == 0 :
+                        filename = "12Gy_pedia.csv"
+
+                    # Pour le plan où on ne traite que le corps en helicoidal
+                    elif iteration == 1:
+                        filename = "12Gy_corps.csv"
+
+                    # Pour le plan où on ne traite que les jambes en TD
+                    elif iteration == 2:
+                        filename = "jambes_background.csv"
                 else:
                     filename = "2Gy_pedia"
         else:
@@ -1371,6 +1431,6 @@ if __name__ == '__main__':
 
         obj_patient.create_objectives(filename)
 
-    iteration += 1
+        iteration += 1
     print('~~~~ Saving case ~~~~')
     obj_patient.patient.Save()
