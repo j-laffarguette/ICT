@@ -3,6 +3,7 @@ import os, sys
 import random
 import warnings
 from statistics import mean
+
 import easygui
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -15,7 +16,7 @@ try:
     script_client_path = r'C:\Program Files\RaySearch Laboratories\RayStation 11B\ScriptClient'
     sys.path.append(script_client_path)
 except:
-    print("")
+    print("Working outside raystation")
 
 from connect import *
 import numpy as np
@@ -111,6 +112,21 @@ def recalage_elastique(direction, mapping=None):
                                                     ReverseMapping=False, AbortWhenBadDisplacementField=False)
 
 
+def process_dose_grid(dose_grid=None):
+    """ Permet de récupérer le centre de la grille de calcul"""
+    if dose_grid == None:
+        dosegrid = obj_patient.beam_set.GetDoseGrid()
+
+    Corner = dosegrid.Corner
+    VoxelSize = dosegrid.VoxelSize
+    NrVoxels = dosegrid.NrVoxels
+
+    centre = [Corner[i] + (VoxelSize[i] * NrVoxels[i]) / 2 for i in ['x', 'y', 'z']]
+    sizes = [(VoxelSize[i] * NrVoxels[i]) for i in ['x', 'y', 'z']]
+
+    return centre, sizes
+
+
 # -------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------
 # CLASSE
@@ -148,6 +164,10 @@ class Patient:
         # Par défaut, à la première création de l'objet patient, le scanner Head First est pris en primary
         self.set_primary(self.examinations['HFS'])
         self.pediatrique()
+
+        # Grille de dose
+        self.dose_grid_HFS = None
+        self.dose_grid_FFS = None
 
     def create_tomohelical_plan(self, bs_name, isocenter, pitch=None, gantry_period=None):
         """
@@ -840,23 +860,35 @@ class Patient:
         self.create_roi(roi_name=roi_name, color="Red", roi_type="FieldOfView")
         self.case.PatientModel.RegionsOfInterest[roi_name].CreateFieldOfViewROI(ExaminationName=self.exam_name)
 
-    def create_bloc_table(self, roi_name="Bloc table"):
+    def create_bloc(self, roi_name="Bloc table", sx=None, sy=None, sz=None, x0=None, y0=None, z0=None):
 
-        epaisseur = 35
+        # s est l'épaisseur du volume en x, y et z
+        if sx is None:
+            sx = 100
+        if sy is None:
+            sy = 35
+        if sz is None:
+            sz = 200
 
-        # récupération du centre du volume mousse
-        y = self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries['Mousse'].GetBoundingBox()[0].y
-        y = (y + epaisseur / 2) - 0.1  # Le point correspond au centre de la boite créée. Pour que le haut de la
-        # boite soit alignée avec la table, il faut descendre la boite de la moitié de son épaisseur. On ajoute
-        # finalement un millimètre pour l'incertitude.
+        # x,y et z correspondent au centre de la boite
+        if x0 is None:
+            x0 = 0
 
-        z = self.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries['Mousse'].GetCenterOfRoi().z
+        if y0 is None:
+            # récupération du centre du volume mousse
+            y0 = self.case.PatientModel.StructureSets[self.exam_name].RoiGeometries['Mousse'].GetBoundingBox()[0].y
+            y0 = (y0 + sy / 2) - 0.1  # Le point correspond au centre de la boite créée. Pour que le haut de la
+            # boite soit alignée avec la table, il faut descendre la boite de la moitié de son épaisseur. On ajoute
+            # finalement un millimètre pour l'incertitude.
+
+        if z0 is None:
+            z0 = self.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries['Mousse'].GetCenterOfRoi().z
 
         self.create_roi(roi_name=roi_name, color="Orange", roi_type="Organ")
 
-        self.case.PatientModel.RegionsOfInterest[roi_name].CreateBoxGeometry(Size={'x': 100, 'y': epaisseur, 'z': 200},
+        self.case.PatientModel.RegionsOfInterest[roi_name].CreateBoxGeometry(Size={'x': sx, 'y': sy, 'z': sz},
                                                                              Examination=self.examination,
-                                                                             Center={'x': 0, 'y': y, 'z': z},
+                                                                             Center={'x': x0, 'y': y0, 'z': z0},
                                                                              Representation="TriangleMesh",
                                                                              VoxelSize=None)
 
@@ -1166,7 +1198,7 @@ if __name__ == '__main__':
 
                 # Création du bloc table que l'on retirera au fov
                 bloc_table = 'bloc_table'
-                obj_patient.create_bloc_table(roi_name=bloc_table)
+                obj_patient.create_bloc(roi_name=bloc_table)
 
                 # fov - bloc table = fov
                 obj_patient.algebra('External_dosi', [fov_name], [bloc_table], ResultOperation="Subtraction",
@@ -1362,8 +1394,7 @@ if __name__ == '__main__':
             # modification de la grille de calcul tmtc
             dosegrid = obj_patient.beam_set.GetDoseGrid()
             Corner = dosegrid.Corner
-
-            VoxelSize = dosegrid.VoxelSize;
+            VoxelSize = dosegrid.VoxelSize
             NrVoxels = dosegrid.NrVoxels
 
             # récupération des valeurs pour debug
@@ -1391,6 +1422,15 @@ if __name__ == '__main__':
 
             obj_patient.beam_set.FractionDose.UpdateDoseGridStructures()
 
+        if direction == 'FFS':
+            # gestion du contour externe
+            # remplace et annulera la gestion réalisée plus haut (ligne 176)
+            # todo: remplacer ce qui a été fait plus haut!
+
+            [x, y, z], [sx, sy, sz] = process_dose_grid()
+            obj_patient.create_bloc("grid",sx,sy,sz,x,y,z )
+            obj_patient.algebra('External_dosi',['External_dosi'],['grid'],ResultOperation="Intersection",derive=False)
+
         ###############################################################################################################
         ###############################################################################################################
         ############################################   OPTIMISATION     ###############################################
@@ -1414,7 +1454,7 @@ if __name__ == '__main__':
             elif pediatrique:
                 if obj_patient.total_dose > 800:
                     # Pour le plan où l'on traite tout d'une traite en hélicoidal
-                    if iteration == 0 :
+                    if iteration == 0:
                         filename = "12Gy_pedia.csv"
 
                     # Pour le plan où on ne traite que le corps en helicoidal
