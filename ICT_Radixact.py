@@ -166,6 +166,7 @@ class Patient:
         self.pediatrique()
 
         # Grille de dose
+        self.taille_patient = 0
         self.dose_grid_HFS = None
         self.dose_grid_FFS = None
 
@@ -438,6 +439,9 @@ class Patient:
                 if not os.path.isfile(os.path.join(self.directory, filename)):
                     raise NameError(f'Fichier {filename} absent !')
 
+
+
+
     def pediatrique(self):
         # S'il n'y a qu'un scanner HFS et que le contour externe mesure moins de 130cm, on peut faire un seul plan
         self.pedia = False
@@ -681,6 +685,7 @@ class Patient:
                 ResultOperation=ResultOperation,
                 ResultMarginSettings={'Type': "Expand", 'Superior': 0, 'Inferior': 0, 'Anterior': 0, 'Posterior': 0,
                                       'Right': 0, 'Left': 0})
+
 
     def get_ct_list(self):
         """ Méthode permettant de récupérer les noms des scanners en fonction de leur position (HFS ou FFS).
@@ -1183,35 +1188,78 @@ if __name__ == '__main__':
                     except:
                         print(f"Impossible de supprimer la dérivation de la ROI {roi}")
 
-            # Gestion du contour externe
+            # Gestion du contour externe + relevé de la taille du patient
             if direction == 'HFS':
                 obj_patient.algebra('External_dosi', [obj_patient.external_name], derive=False)
-            elif direction == 'FFS':
-                # Création du volume contenant tout le champ de vue
-                image_fov_name = 'fov_box'
-                obj_patient.create_fov_box(roi_name=image_fov_name, retraction=2)
 
-                # Création du field of view qui servira d'externe pour le plan pieds
-                fov_name = 'Field-of-view'
-                obj_patient.create_field_of_view(roi_name=fov_name)
-                obj_patient.algebra('External_dosi', [fov_name])
+                bas, haut = [lim.z for lim in obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+                                                  'PTV HFS'].GetBoundingBox()]
+                obj_patient.taille_patient += haut-bas
+
+
+            elif direction == 'FFS':
+                # # Création du volume contenant tout le champ de vue
+                # image_fov_name = 'fov_box'
+                # obj_patient.create_fov_box(roi_name=image_fov_name, retraction=2)
+                #
+                # # Création du field of view qui servira d'externe pour le plan pieds
+                # fov_name = 'Field-of-view'
+                # obj_patient.create_field_of_view(roi_name=fov_name)
+                # obj_patient.algebra('External_dosi', [fov_name])
 
                 # Création du bloc table que l'on retirera au fov
                 bloc_table = 'bloc_table'
                 obj_patient.create_bloc(roi_name=bloc_table)
 
-                # fov - bloc table = fov
-                obj_patient.algebra('External_dosi', [fov_name], [bloc_table], ResultOperation="Subtraction",
-                                    derive=False)
+
+                # # fov - bloc table = fov
+                # obj_patient.algebra('External_dosi', [fov_name], [bloc_table], ResultOperation="Subtraction",
+                #                     derive=False)
 
                 # fov = fov intersect image_fov_name
-                obj_patient.algebra('External_dosi', ['External_dosi'], [image_fov_name],
-                                    ResultOperation="Intersection",
-                                    derive=False)
+                # obj_patient.algebra('External_dosi', ['External_dosi'], [image_fov_name],
+                #                     ResultOperation="Intersection",
+                #                     derive=False)
+
+
+                # désolé j'ai la flemme de reprendre la fonction algebra avec une modification de margeA, je le ferai plus tard
+                obj_patient.case.PatientModel.RegionsOfInterest['External_dosi'].CreateAlgebraGeometry(Examination=obj_patient.examination,
+                                                                                           Algorithm="Auto",
+                                                                                           ExpressionA={
+                                                                                               'Operation': "Union",
+                                                                                               'SourceRoiNames': [
+                                                                                                   "External (1)"],
+                                                                                               'MarginSettings': {
+                                                                                                   'Type': "Expand",
+                                                                                                   'Superior': 0,
+                                                                                                   'Inferior': 0,
+                                                                                                   'Anterior': 0,
+                                                                                                   'Posterior': 12,
+                                                                                                   'Right': 0,
+                                                                                                   'Left': 0}},
+                                                                                           ExpressionB={
+                                                                                               'Operation': "Union",
+                                                                                               'SourceRoiNames': [
+                                                                                                   "bloc_table"],
+                                                                                               'MarginSettings': {
+                                                                                                   'Type': "Expand",
+                                                                                                   'Superior': 0,
+                                                                                                   'Inferior': 0,
+                                                                                                   'Anterior': 0,
+                                                                                                   'Posterior': 0,
+                                                                                                   'Right': 0,
+                                                                                                   'Left': 0}},
+                                                                                           ResultOperation="Subtraction",
+                                                                                           ResultMarginSettings={
+                                                                                               'Type': "Expand",
+                                                                                               'Superior': 0,
+                                                                                               'Inferior': 0,
+                                                                                               'Anterior': 0,
+                                                                                               'Posterior': 0,
+                                                                                               'Right': 0, 'Left': 0})
 
                 obj_patient.case.PatientModel.ToggleExcludeFromExport(ExcludeFromExport=True,
-                                                                      RegionOfInterests=['External_dosi', 'fov_box',
-                                                                                         'Field-of-view',
+                                                                      RegionOfInterests=['External_dosi',
                                                                                          'bloc_table', ],
                                                                       PointsOfInterests=[])
 
@@ -1220,6 +1268,12 @@ if __name__ == '__main__':
                 except:
                     print(f"Impossible de supprimer la dérivation de la ROI 'External_dosi'")
 
+
+                bas, haut = [lim.z for lim in obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+                                                  'PTV background'].GetBoundingBox()]
+                obj_patient.taille_patient += haut-bas
+
+    print(f'Taille du patient = {obj_patient.taille_patient}')
     obj_patient.case.PatientModel.RegionsOfInterest['External_dosi'].SetAsExternal()
 
     #########################################################################
@@ -1416,20 +1470,35 @@ if __name__ == '__main__':
             hauteur_grille_y = abs(corner_y - abs(sous_table)) + 1  # taille de la grille dans la direction y
             NrVoxels['y'] = int(abs(hauteur_grille_y / VoxelSize["y"]))
 
+            # Modification de la grille dans la direction z (inf/sup)
+            # On souhaite que la longueur de la grille corresponde à la taille du patient stockée dans obj_patient.taille_patient.
+            # Si la taille patient n'est pas indiquée, elle est prise égale à 185 cm par défaut
+
+            if obj_patient.taille_patient == 0:
+                taille = 185
+            else:
+                taille = obj_patient.taille_patient
+
+            Corner['z'] = obj_patient.case.PatientModel.StructureSets[obj_patient.exam_name].RoiGeometries[
+                "PTV HFS"].GetBoundingBox()[1].z - taille - 5 # +1 par sécurité
+            NrVoxels['z'] = int(abs((taille + 10)  / VoxelSize["z"]))
+
+
+            # maj de la grille
             retval_0 = obj_patient.beam_set.UpdateDoseGrid(Corner=Corner,
                                                            VoxelSize=VoxelSize,
                                                            NumberOfVoxels=NrVoxels)
 
             obj_patient.beam_set.FractionDose.UpdateDoseGridStructures()
 
-        if direction == 'FFS':
+        # if direction == 'FFS':
             # gestion du contour externe
             # remplace et annulera la gestion réalisée plus haut (ligne 176)
             # todo: remplacer ce qui a été fait plus haut!
 
-            [x, y, z], [sx, sy, sz] = process_dose_grid()
-            obj_patient.create_bloc("grid",sx,sy,sz,x,y,z )
-            obj_patient.algebra('External_dosi',['External_dosi'],['grid'],ResultOperation="Intersection",derive=False)
+            # [x, y, z], [sx, sy, sz] = process_dose_grid()
+            # obj_patient.create_bloc("grid",sx,sy,sz,x,y,z )
+            # obj_patient.algebra('External_dosi',['External_dosi'],['grid'],ResultOperation="Intersection",derive=False)
 
         ###############################################################################################################
         ###############################################################################################################
