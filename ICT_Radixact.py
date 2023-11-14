@@ -4,7 +4,7 @@ import random
 import warnings
 from statistics import mean
 
-import easygui
+# import easygui
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd
@@ -13,14 +13,14 @@ try:
     pid_file_path = os.path.join(os.environ.get('userprofile'), 'AppData', 'Local', 'Temp', 'raystation.pid')
     with open(pid_file_path) as f:
         os.environ['RAYSTATION_PID'] = f.read()
-    script_client_path = r'C:\Program Files\RaySearch Laboratories\RayStation 11B\ScriptClient'
+    script_client_path = r'C:\Program Files\RaySearch Laboratories\RayStation 12A-SP1\ScriptClient'
     sys.path.append(script_client_path)
 except:
     print("Working outside raystation")
 
 from connect import *
 import numpy as np
-from easygui import multenterbox, ynbox
+# from easygui import multenterbox, ynbox
 from datetime import datetime
 
 
@@ -759,7 +759,7 @@ class Patient:
         self.plan.AddOptimizationFunction(FunctionType=FunctionType, RoiName=RoiName,
                                           IsConstraint=IsConstraint,
                                           RestrictAllBeamsIndividually=False,
-                                          RestrictToBeam=None, IsRobust=IsRobust,
+                                          RestrictToBeams=[], IsRobust=IsRobust,
                                           RestrictToBeamSet=RestrictToBeamSet, UseRbeDose=False)
 
         # Remplissage des valeurs
@@ -1050,7 +1050,7 @@ if __name__ == '__main__':
             ROI_LIST = ['PTV FFS', 'PTV_4', 'PTV_3', 'PTV_2', 'PTV_1', "PTV HFS"]
             colors = ['#FF80FF', "#FF8080", "#FFFF80", "#00FF80", "#00FFFF", "#0080C0"]
 
-        # Vérification de l'existance des differentes roi dans le case
+        # Vérification de l'existence des differentes roi dans le case
         resultat = [check_roi(obj_patient.case, roi) for roi in ROI_LIST]
         # Création des ROI dans le roi set si ROI non existantes
         [obj_patient.create_roi(ROI_LIST[index], color=colors[index]) for index, roi in enumerate(resultat) if not
@@ -1228,7 +1228,7 @@ if __name__ == '__main__':
                                                                                            ExpressionA={
                                                                                                'Operation': "Union",
                                                                                                'SourceRoiNames': [
-                                                                                                   "External (1)"],
+                                                                                                   obj_patient.external_name],
                                                                                                'MarginSettings': {
                                                                                                    'Type': "Expand",
                                                                                                    'Superior': 0,
